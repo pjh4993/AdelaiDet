@@ -206,6 +206,8 @@ class FCOSHead(nn.Module):
         prior_prob = cfg.MODEL.FCOS.PRIOR_PROB
         bias_value = -math.log((1 - prior_prob) / prior_prob)
         torch.nn.init.constant_(self.cls_logits.bias, bias_value)
+        # initialize the bias for centerness
+        torch.nn.init.constant_(self.ctrness.bias, bias_value)
 
     def forward(self, x, top_module=None, yield_bbox_towers=False):
         logits = []

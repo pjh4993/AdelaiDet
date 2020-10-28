@@ -351,9 +351,11 @@ class FCOSOutputs(nn.Module):
                 ctrness_targets
             ) / loss_denorm
 
-            ctrness_loss = F.binary_cross_entropy_with_logits(
+            ctrness_loss = sigmoid_focal_loss_jit(
                 instances.ctrness_pred,
                 ctrness_targets,
+                alpha=self.focal_loss_alpha,
+                gamma=self.focal_loss_gamma,
                 reduction="sum"
             ) / num_pos_avg
         else:
