@@ -351,9 +351,11 @@ class FCOSOutputs(nn.Module):
                 ctrness_targets
             ) / loss_denorm
 
-            ctrness_loss = F.binary_cross_entropy_with_logits(
+            ctrness_loss = sigmoid_focal_loss_jit(
                 instances.ctrness_pred,
                 ctrness_targets,
+                alpha=self.focal_loss_alpha,
+                gamma=self.focal_loss_gamma,
                 reduction="sum"
             ) / num_pos_avg
         else:
@@ -445,7 +447,7 @@ class FCOSOutputs(nn.Module):
         if self.thresh_with_ctr:
             logits_pred = logits_pred * ctrness_pred[:, :, None]
         candidate_inds = logits_pred > self.pre_nms_thresh
-        pre_nms_top_n = candidate_inds.view(N, -1).sum(1)
+        pre_nms_top_n = candidate_inds.reshape(N, -1).sum(1)
         pre_nms_top_n = pre_nms_top_n.clamp(max=self.pre_nms_topk)
 
         if not self.thresh_with_ctr:
@@ -456,7 +458,7 @@ class FCOSOutputs(nn.Module):
             per_box_cls = logits_pred[i]
             per_candidate_inds = candidate_inds[i]
             per_box_cls = per_box_cls[per_candidate_inds]
-
+            
             per_candidate_nonzeros = per_candidate_inds.nonzero()
             per_box_loc = per_candidate_nonzeros[:, 0]
             per_class = per_candidate_nonzeros[:, 1]
@@ -464,6 +466,10 @@ class FCOSOutputs(nn.Module):
             per_box_regression = box_regression[i]
             per_box_regression = per_box_regression[per_box_loc]
             per_locations = locations[per_box_loc]
+
+            per_box_ctrness = ctrness_pred[i]
+            per_box_ctrness = per_box_ctrness[per_box_loc]
+
             if top_feat is not None:
                 per_top_feat = top_feat[i]
                 per_top_feat = per_top_feat[per_box_loc]
@@ -476,6 +482,7 @@ class FCOSOutputs(nn.Module):
                 per_class = per_class[top_k_indices]
                 per_box_regression = per_box_regression[top_k_indices]
                 per_locations = per_locations[top_k_indices]
+                per_box_ctrness = per_box_ctrness[top_k_indices]
                 if top_feat is not None:
                     per_top_feat = per_top_feat[top_k_indices]
 
@@ -491,6 +498,7 @@ class FCOSOutputs(nn.Module):
             boxlist.scores = torch.sqrt(per_box_cls)
             boxlist.pred_classes = per_class
             boxlist.locations = per_locations
+            boxlist.centerness = per_box_ctrness
             if top_feat is not None:
                 boxlist.top_feat = per_top_feat
             results.append(boxlist)
