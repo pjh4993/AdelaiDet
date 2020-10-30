@@ -351,12 +351,9 @@ class FCOSOutputs(nn.Module):
                 ctrness_targets
             ) / loss_denorm
 
-            ctrness_loss = sigmoid_focal_loss_jit(
-                instances.ctrness_pred,
-                ctrness_targets,
-                alpha=self.focal_loss_alpha,
-                gamma=self.focal_loss_gamma,
-                reduction="sum"
+            ctrness_loss = torch.nn.MSELoss(reduction="sum")(
+                instances.ctrness_pred.sigmoid(),
+                ctrness_targets
             ) / num_pos_avg
         else:
             reg_loss = instances.reg_pred.sum() * 0
