@@ -7,6 +7,7 @@ from detectron2.layers import cat
 from detectron2.structures import Instances, Boxes
 from detectron2.utils.comm import get_world_size
 from fvcore.nn import sigmoid_focal_loss_jit
+import numpy as np
 
 from adet.utils.comm import reduce_sum
 from adet.layers import ml_nms, IOULoss
@@ -48,6 +49,16 @@ def compute_ctrness_targets(reg_targets):
                  (top_bottom.min(dim=-1)[0] / top_bottom.max(dim=-1)[0])
     return torch.sqrt(ctrness)
 
+def compute_pi_diag_targets(reg_targets):
+    if len(reg_targets) == 0:
+        return reg_targets.new_zeros(len(reg_targets))
+    diag = reg_targets[:,[0,2]].sum(axis=0) ** 2 + reg_targets[:,[1,3]].sum(axis=0) **2
+    anchor_loc = torch.cat((reg_targets[:,[0,2]].sum(axis=0)/2 - reg_targets[:,0], 
+                       reg_targets[:,[1,3]].sum(axis=0)/2 - reg_targets[:,1]), dim=1)
+    anchor_loc /= anchor_loc.norm(dim=1)
+    diag_rate = (anchor_loc[:,0] ** 2 + anchor_loc[:,1] **2) / diag
+    diag_pi = torch.atan2(anchor_loc[:,1], anchor_loc[:,0]) * 2 / np.pi
+    return diag_rate, diag_pi
 
 class FCOSOutputs(nn.Module):
     def __init__(self, cfg):
