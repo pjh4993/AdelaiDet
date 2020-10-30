@@ -129,6 +129,7 @@ class FCOSHead(nn.Module):
         # TODO: Implement the sigmoid version first.
         self.num_classes = cfg.MODEL.FCOS.NUM_CLASSES
         self.fpn_strides = cfg.MODEL.FCOS.FPN_STRIDES
+        self.ctrness_on_bbox = cfg.MODEL.FCOS.CTRNESS_ON_BBOX
         head_configs = {"cls": (cfg.MODEL.FCOS.NUM_CLS_CONVS,
                                 cfg.MODEL.FCOS.USE_DEFORMABLE),
                         "bbox": (cfg.MODEL.FCOS.NUM_BOX_CONVS,
@@ -223,7 +224,12 @@ class FCOSHead(nn.Module):
                 bbox_towers.append(bbox_tower)
 
             logits.append(self.cls_logits(cls_tower))
-            ctrness.append(self.ctrness(bbox_tower))
+
+            if self.ctrness_on_bbox:
+                ctrness.append(self.ctrness(bbox_tower))
+            else:
+                ctrness.append(self.ctrness(cls_tower))
+
             reg = self.bbox_pred(bbox_tower)
             if self.scales is not None:
                 reg = self.scales[l](reg)

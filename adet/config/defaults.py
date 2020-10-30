@@ -31,6 +31,7 @@ _C.MODEL.FCOS.POST_NMS_TOPK_TEST = 100
 _C.MODEL.FCOS.TOP_LEVELS = 2
 _C.MODEL.FCOS.NORM = "GN"  # Support GN or none
 _C.MODEL.FCOS.USE_SCALE = True
+_C.MODEL.FCOS.CTRNESS_ON_BBOX = True
 
 # Multiply centerness before threshold
 # This will affect the final performance by about 0.05 AP but save some time
