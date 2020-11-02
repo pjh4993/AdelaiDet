@@ -380,7 +380,7 @@ class FCOSOutputs(nn.Module):
             "loss_denorm": loss_denorm
         }
         return extras, losses
-
+ 
     def predict_proposals(
             self, logits_pred, reg_pred, ctrness_pred,
             locations, image_sizes, top_feats=None
