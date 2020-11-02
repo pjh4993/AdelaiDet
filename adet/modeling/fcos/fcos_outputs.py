@@ -43,8 +43,8 @@ Naming convention:
 def compute_ctrness_targets(reg_targets):
     if len(reg_targets) == 0:
         return reg_targets.new_zeros(len(reg_targets))
-    left_right = reg_targets[:, [0, 2]]
-    top_bottom = reg_targets[:, [1, 3]]
+    left_right = reg_targets[:, [0, 2]] + 1e-5
+    top_bottom = reg_targets[:, [1, 3]] + 1e-5
     ctrness = (left_right.min(dim=-1)[0] / left_right.max(dim=-1)[0]) * \
                  (top_bottom.min(dim=-1)[0] / top_bottom.max(dim=-1)[0])
     return torch.sqrt(ctrness)
@@ -351,6 +351,7 @@ class FCOSOutputs(nn.Module):
         instances.pos_inds = pos_inds
 
         ctrness_targets = compute_ctrness_targets(instances.reg_targets)
+        ctrness_reg_pred = compute_ctrness_targets(instances.reg_pred)
         ctrness_targets_sum = ctrness_targets.sum()
         loss_denorm = max(reduce_sum(ctrness_targets_sum).item() / num_gpus, 1e-6)
         instances.gt_ctrs = ctrness_targets
@@ -366,6 +367,11 @@ class FCOSOutputs(nn.Module):
                 instances.ctrness_pred.sigmoid(),
                 ctrness_targets
             ) / num_pos_avg
+
+            ctrness_pred_loss = torch.nn.MSELoss(reduction="sum")(
+                ctrness_reg_pred,
+                ctrness_targets
+            )/num_pos_avg
         else:
             reg_loss = instances.reg_pred.sum() * 0
             ctrness_loss = instances.ctrness_pred.sum() * 0
@@ -373,7 +379,8 @@ class FCOSOutputs(nn.Module):
         losses = {
             "loss_fcos_cls": class_loss,
             "loss_fcos_loc": reg_loss,
-            "loss_fcos_ctr": ctrness_loss
+            "loss_fcos_ctr": ctrness_loss,
+            "loss_fcos_ctr_pred": ctrness_pred_loss,
         }
         extras = {
             "instances": instances,

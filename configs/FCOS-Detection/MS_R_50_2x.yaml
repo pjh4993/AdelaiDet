@@ -3,6 +3,8 @@ MODEL:
   WEIGHTS: "detectron2://ImageNetPretrained/MSRA/R-50.pkl"
   RESNETS:
     DEPTH: 50
+  FCOS:
+    LOC_LOSS_TYPE: 'giou_focal'
 SOLVER:
   STEPS: (120000, 160000)
   MAX_ITER: 180000

@@ -59,6 +59,8 @@ class IOULoss(nn.Module):
             losses = 1 - ious
         elif self.loc_loss_type == 'giou':
             losses = 1 - gious
+        elif self.loc_loss_type == 'giou_focal':
+            losses = -torch.log((1 + gious)/2)*((1 + gious)/2)
         else:
             raise NotImplementedError
 
