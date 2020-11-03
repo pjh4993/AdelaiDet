@@ -199,6 +199,9 @@ class FCOSOutputs(nn.Module):
         labels = []
         reg_targets = []
         target_inds = []
+        valid_sample = []
+        invalid_sample = []
+
         xs, ys = locations[:, 0], locations[:, 1]
 
         num_targets = 0
@@ -222,17 +225,18 @@ class FCOSOutputs(nn.Module):
             b = bboxes[:, 3][None] - ys[:, None]
             reg_targets_per_im = torch.stack([l, t, r, b], dim=2)
 
+            is_in_boxes = reg_targets_per_im.min(dim=2)[0] > 0
             if self.center_sample:
                 if targets_per_im.has("gt_bitmasks_full"):
                     bitmasks = targets_per_im.gt_bitmasks_full
                 else:
                     bitmasks = None
-                is_in_boxes = self.get_sample_region(
+                is_in_radius = self.get_sample_region(
                     bboxes, self.strides, num_loc_list, xs, ys,
                     bitmasks=bitmasks, radius=self.radius
                 )
             else:
-                is_in_boxes = reg_targets_per_im.min(dim=2)[0] > 0
+                is_in_radius = is_in_boxes
 
             max_reg_targets_per_im = reg_targets_per_im.max(dim=2)[0]
             # limit the regression range for each location
@@ -241,7 +245,7 @@ class FCOSOutputs(nn.Module):
                 (max_reg_targets_per_im <= size_ranges[:, [1]])
 
             locations_to_gt_area = area[None].repeat(len(locations), 1)
-            locations_to_gt_area[is_in_boxes == 0] = INF
+            locations_to_gt_area[is_in_radius == 0] = INF
             locations_to_gt_area[is_cared_in_the_level == 0] = INF
 
             # if there are still more than one objects for a location,
@@ -259,10 +263,19 @@ class FCOSOutputs(nn.Module):
             reg_targets.append(reg_targets_per_im)
             target_inds.append(target_inds_per_im)
 
+            is_in_boxes = is_in_boxes[range(len(locations)), locations_to_gt_inds]
+            is_cared_in_the_level = is_cared_in_the_level[range(len(locations)), locations_to_gt_inds]
+
+            valid_inds = is_in_boxes * is_cared_in_the_level
+            valid_sample.append(valid_inds)
+            invalid_sample.append(valid_inds == 0)
+
         return {
             "labels": labels,
             "reg_targets": reg_targets,
-            "target_inds": target_inds
+            "target_inds": target_inds,
+            "valid_inds": valid_sample,
+            "invalid_inds": invalid_sample
         }
 
     def losses(self, logits_pred, reg_pred, ctrness_pred, locations, gt_instances, top_feats=None, identity=None):
@@ -301,6 +314,13 @@ class FCOSOutputs(nn.Module):
         instances.fpn_levels = cat([
             x.reshape(-1) for x in training_targets["fpn_levels"]
         ], dim=0)
+
+        instances.valid_inds = cat([
+            x.reshape(-1) for x in training_targets["valid_inds"]
+        ])
+        instances.invalid_inds = cat([
+            x.reshape(-1) for x in training_targets["invalid_inds"]
+        ])
 
         instances.logits_pred = cat([
             # Reshape: (N, C, Hi, Wi) -> (N, Hi, Wi, C) -> (N*Hi*Wi, C)
@@ -359,11 +379,13 @@ class FCOSOutputs(nn.Module):
         )
         """
 
-        valid_inds = ((instances.reg_targets < 0).sum(axis=1) == 0).nonzero().squeeze(1)
+        #valid_inds = ((instances.reg_targets < 0).sum(axis=1) == 0).nonzero().squeeze(1)
+        valid_inds = instances.valid_inds.nonzero().squeeze(1)
         total_num_valid = reduce_sum(valid_inds.new_tensor([valid_inds.numel()])).item()
         num_valid_avg = max(total_num_valid / num_gpus, 1.0)
 
-        invalid_inds = ((instances.reg_targets < 0).sum(axis=1) > 0).nonzero().squeeze(1) 
+        #invalid_inds = ((instances.reg_targets < 0).sum(axis=1) > 0).nonzero().squeeze(1) 
+        invalid_inds = instances.invalid_inds.nonzero().squeeze(1)
         total_num_invalid = reduce_sum(invalid_inds.new_tensor([invalid_inds.numel()])).item()
         num_invalid_avg = max(total_num_invalid / num_gpus, 1.0)
 
@@ -375,9 +397,6 @@ class FCOSOutputs(nn.Module):
 
         instances = instances[pos_inds]
         instances.pos_inds = pos_inds
-
-        #instances = instances[pos_inds]
-        #instances.pos_inds = pos_inds
 
         #ctrness_targets = compute_ctrness_targets(instances.reg_targets)
         ctrness_targets = compute_pi_diag_targets(valid_instance.reg_targets)
