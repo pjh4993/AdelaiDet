@@ -52,13 +52,13 @@ def compute_ctrness_targets(reg_targets):
 def compute_pi_diag_targets(reg_targets):
     if len(reg_targets) == 0:
         return reg_targets.new_zeros(len(reg_targets))
-    diag = reg_targets[:,[0,2]].sum(axis=0) ** 2 + reg_targets[:,[1,3]].sum(axis=0) **2
-    anchor_loc = torch.cat((reg_targets[:,[0,2]].sum(axis=0)/2 - reg_targets[:,0], 
-                       reg_targets[:,[1,3]].sum(axis=0)/2 - reg_targets[:,1]), dim=1)
-    anchor_loc /= anchor_loc.norm(dim=1)
+    diag = (reg_targets[:,[0,2]].sum(axis=1) ** 2 + reg_targets[:,[1,3]].sum(axis=1) **2)/4
+    anchor_loc = torch.cat(((reg_targets[:,[0,2]].sum(axis=1)/2 - reg_targets[:,0]).unsqueeze(1), 
+                       (reg_targets[:,[1,3]].sum(axis=1)/2 - reg_targets[:,1]).unsqueeze(1)), dim=1)
+    #anchor_loc /= anchor_loc.norm(dim=1)
     diag_rate = (anchor_loc[:,0] ** 2 + anchor_loc[:,1] **2) / diag
-    diag_pi = torch.atan2(anchor_loc[:,1], anchor_loc[:,0]) * 2 / np.pi
-    return diag_rate, diag_pi
+    #diag_pi = torch.atan2(anchor_loc[:,1], anchor_loc[:,0]) * 2 / np.pi
+    return 1 - diag_rate#, diag_pi
 
 class FCOSOutputs(nn.Module):
     def __init__(self, cfg):
@@ -265,7 +265,7 @@ class FCOSOutputs(nn.Module):
             "target_inds": target_inds
         }
 
-    def losses(self, logits_pred, reg_pred, ctrness_pred, locations, gt_instances, top_feats=None):
+    def losses(self, logits_pred, reg_pred, ctrness_pred, locations, gt_instances, top_feats=None, identity=None):
         """
         Return the losses from a set of FCOS predictions and their associated ground-truth.
 
@@ -315,6 +315,12 @@ class FCOSOutputs(nn.Module):
             x.permute(0, 2, 3, 1).reshape(-1) for x in ctrness_pred
         ], dim=0,)
 
+        if identity:
+            instances.identity_pred = cat([
+                # Reshape: (N, 1, Hi, Wi) -> (N*Hi*Wi,)
+                x.permute(0, 2, 3, 1).reshape(-1) for x in identity
+            ], dim=0,)
+
         if len(top_feats) > 0:
             instances.top_feats = cat([
                 # Reshape: (N, -1, Hi, Wi) -> (N*Hi*Wi, -1)
@@ -346,32 +352,64 @@ class FCOSOutputs(nn.Module):
             gamma=self.focal_loss_gamma,
             reduction="sum",
         ) / num_pos_avg
+        
+        """
+        identity_loss = nn.TripletMarginLoss(reduction="sum")(
+            
+        )
+        """
+
+        valid_inds = ((instances.reg_targets < 0).sum(axis=1) == 0).nonzero().squeeze(1)
+        total_num_valid = reduce_sum(valid_inds.new_tensor([valid_inds.numel()])).item()
+        num_valid_avg = max(total_num_valid / num_gpus, 1.0)
+
+        invalid_inds = ((instances.reg_targets < 0).sum(axis=1) > 0).nonzero().squeeze(1) 
+        total_num_invalid = reduce_sum(invalid_inds.new_tensor([invalid_inds.numel()])).item()
+        num_invalid_avg = max(total_num_invalid / num_gpus, 1.0)
+
+        invalid_instance = instances[invalid_inds]
+        invalid_instance.pos_inds = invalid_inds
+
+        valid_instance = instances[valid_inds]
+        valid_instance.pos_inds = valid_inds
 
         instances = instances[pos_inds]
         instances.pos_inds = pos_inds
 
-        ctrness_targets = compute_ctrness_targets(instances.reg_targets)
-        ctrness_reg_pred = compute_ctrness_targets(instances.reg_pred)
-        ctrness_targets_sum = ctrness_targets.sum()
+        #instances = instances[pos_inds]
+        #instances.pos_inds = pos_inds
+
+        #ctrness_targets = compute_ctrness_targets(instances.reg_targets)
+        ctrness_targets = compute_pi_diag_targets(valid_instance.reg_targets)
+
+        positive_ctrness_targets = compute_pi_diag_targets(instances.reg_targets)
+        ctrness_targets_sum = positive_ctrness_targets.sum()
         loss_denorm = max(reduce_sum(ctrness_targets_sum).item() / num_gpus, 1e-6)
-        instances.gt_ctrs = ctrness_targets
+        instances.gt_ctrs = positive_ctrness_targets
 
         if pos_inds.numel() > 0:
             reg_loss = self.loc_loss_func(
                 instances.reg_pred,
                 instances.reg_targets,
-                ctrness_targets
+                positive_ctrness_targets
             ) / loss_denorm
 
-            ctrness_loss = torch.nn.MSELoss(reduction="sum")(
-                instances.ctrness_pred.sigmoid(),
+            ctrness_loss = torch.nn.MSELoss(reduction="none")(
+                valid_instance.ctrness_pred.sigmoid(),
                 ctrness_targets
-            ) / num_pos_avg
+            ) / num_valid_avg
 
-            ctrness_pred_loss = torch.nn.MSELoss(reduction="sum")(
-                ctrness_reg_pred,
-                ctrness_targets
-            )/num_pos_avg
+            ctrness_loss *= torch.abs(valid_instance.ctrness_pred.sigmoid() -  ctrness_targets).detach()
+            ctrness_loss = ctrness_loss.sum()
+
+            ctrness_neg_loss = torch.nn.MSELoss(reduction="none")(
+                invalid_instance.ctrness_pred.sigmoid(),
+                torch.zeros_like(invalid_instance.ctrness_pred)
+            ) / num_invalid_avg
+
+            ctrness_neg_loss *= invalid_instance.ctrness_pred.sigmoid().detach()
+            ctrness_neg_loss = ctrness_neg_loss.sum()
+
         else:
             reg_loss = instances.reg_pred.sum() * 0
             ctrness_loss = instances.ctrness_pred.sum() * 0
@@ -380,7 +418,7 @@ class FCOSOutputs(nn.Module):
             "loss_fcos_cls": class_loss,
             "loss_fcos_loc": reg_loss,
             "loss_fcos_ctr": ctrness_loss,
-            "loss_fcos_ctr_pred": ctrness_pred_loss,
+            "loss_fcos_inv_ctr": ctrness_neg_loss,
         }
         extras = {
             "instances": instances,
@@ -406,7 +444,7 @@ class FCOSOutputs(nn.Module):
         bundle = {
             "l": locations, "o": logits_pred,
             "r": reg_pred, "c": ctrness_pred,
-            "s": self.strides,
+            "s": self.strides
         }
 
         if len(top_feats) > 0:
@@ -459,15 +497,18 @@ class FCOSOutputs(nn.Module):
 
         # if self.thresh_with_ctr is True, we multiply the classification
         # scores with centerness scores before applying the threshold.
+        """
         if self.thresh_with_ctr:
             logits_pred = logits_pred * ctrness_pred[:, :, None]
+        """
         candidate_inds = logits_pred > self.pre_nms_thresh
         pre_nms_top_n = candidate_inds.reshape(N, -1).sum(1)
         pre_nms_top_n = pre_nms_top_n.clamp(max=self.pre_nms_topk)
 
+        """
         if not self.thresh_with_ctr:
             logits_pred = logits_pred * ctrness_pred[:, :, None]
-
+        """
         results = []
         for i in range(N):
             per_box_cls = logits_pred[i]
