@@ -278,7 +278,7 @@ class FCOSOutputs(nn.Module):
             "invalid_inds": invalid_sample
         }
 
-    def losses(self, logits_pred, reg_pred, ctrness_pred, locations, gt_instances, top_feats=None, identity=None):
+    def losses(self, logits_pred, reg_pred, id_vec_pred, locations, gt_instances, top_feats=None,):
         """
         Return the losses from a set of FCOS predictions and their associated ground-truth.
 
@@ -330,16 +330,11 @@ class FCOSOutputs(nn.Module):
             # Reshape: (N, B, Hi, Wi) -> (N, Hi, Wi, B) -> (N*Hi*Wi, B)
             x.permute(0, 2, 3, 1).reshape(-1, 4) for x in reg_pred
         ], dim=0,)
-        instances.ctrness_pred = cat([
-            # Reshape: (N, 1, Hi, Wi) -> (N*Hi*Wi,)
-            x.permute(0, 2, 3, 1).reshape(-1) for x in ctrness_pred
-        ], dim=0,)
 
-        if identity:
-            instances.identity_pred = cat([
-                # Reshape: (N, 1, Hi, Wi) -> (N*Hi*Wi,)
-                x.permute(0, 2, 3, 1).reshape(-1) for x in identity
-            ], dim=0,)
+        instances.identity_pred = cat([
+            # Reshape: (N, 1, Hi, Wi) -> (N*Hi*Wi,)
+            x.permute(0, 2, 3, 1).reshape(-1) for x in id_vec_pred
+        ], dim=0,)
 
         if len(top_feats) > 0:
             instances.top_feats = cat([
@@ -516,18 +511,16 @@ class FCOSOutputs(nn.Module):
 
         # if self.thresh_with_ctr is True, we multiply the classification
         # scores with centerness scores before applying the threshold.
-        """
         if self.thresh_with_ctr:
             logits_pred = logits_pred * ctrness_pred[:, :, None]
-        """
+
         candidate_inds = logits_pred > self.pre_nms_thresh
         pre_nms_top_n = candidate_inds.reshape(N, -1).sum(1)
         pre_nms_top_n = pre_nms_top_n.clamp(max=self.pre_nms_topk)
 
-        """
         if not self.thresh_with_ctr:
             logits_pred = logits_pred * ctrness_pred[:, :, None]
-        """
+
         results = []
         for i in range(N):
             per_box_cls = logits_pred[i]

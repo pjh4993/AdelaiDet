@@ -89,7 +89,7 @@ class FCOS(nn.Module):
         if self.training:
             results, losses = self.fcos_outputs.losses(
                 logits_pred, reg_pred, ctrness_pred,
-                locations, gt_instances, top_feats, identity
+                locations, gt_instances, top_feats,
             )
             
             if self.yield_proposal:

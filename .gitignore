@@ -39,6 +39,7 @@ dist/
 
 # project dirs
 /datasets/coco
+/datasets/nlos
 /datasets/lvis
 /datasets/pic
 /datasets/ytvos
