@@ -47,10 +47,13 @@ _C.MODEL.FCOS.USE_DEFORMABLE = False
 # the number of convolutions used in the cls and bbox tower
 _C.MODEL.FCOS.NUM_CLS_CONVS = 4
 _C.MODEL.FCOS.NUM_BOX_CONVS = 4
+_C.MODEL.FCOS.NUM_ID_CONVS = 4
 _C.MODEL.FCOS.NUM_SHARE_CONVS = 0
 _C.MODEL.FCOS.CENTER_SAMPLE = True
 _C.MODEL.FCOS.POS_RADIUS = 1.5
 _C.MODEL.FCOS.LOC_LOSS_TYPE = 'giou'
+_C.MODEL.FCOS.ID_LOSS_TYPE = '.'
+_C.MODEL.FCOS.ID_THRESHOLD = 0.1
 _C.MODEL.FCOS.YIELD_PROPOSAL = False
 
 # ---------------------------------------------------------------------------- #

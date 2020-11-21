@@ -10,7 +10,7 @@ from fvcore.nn import sigmoid_focal_loss_jit
 import numpy as np
 
 from adet.utils.comm import reduce_sum
-from adet.layers import ml_nms, IOULoss
+from adet.layers import ml_nms, IOULoss, IDLoss
 
 
 logger = logging.getLogger(__name__)
@@ -72,6 +72,7 @@ class FCOSOutputs(nn.Module):
         self.pre_nms_topk_train = cfg.MODEL.FCOS.PRE_NMS_TOPK_TRAIN
         self.post_nms_topk_train = cfg.MODEL.FCOS.POST_NMS_TOPK_TRAIN
         self.loc_loss_func = IOULoss(cfg.MODEL.FCOS.LOC_LOSS_TYPE)
+        self.identity_loss_func = IDLoss(cfg.MODEL.FCOS.ID_LOSS_TYPE, cfg.MODEL.FCOS.ID_THRESHOLD)
 
         self.pre_nms_thresh_test = cfg.MODEL.FCOS.INFERENCE_TH_TEST
         self.pre_nms_topk_test = cfg.MODEL.FCOS.PRE_NMS_TOPK_TEST
@@ -263,22 +264,13 @@ class FCOSOutputs(nn.Module):
             reg_targets.append(reg_targets_per_im)
             target_inds.append(target_inds_per_im)
 
-            is_in_boxes = is_in_boxes[range(len(locations)), locations_to_gt_inds]
-            is_cared_in_the_level = is_cared_in_the_level[range(len(locations)), locations_to_gt_inds]
-
-            valid_inds = is_in_boxes * is_cared_in_the_level
-            valid_sample.append(valid_inds)
-            invalid_sample.append(valid_inds == 0)
-
         return {
             "labels": labels,
             "reg_targets": reg_targets,
             "target_inds": target_inds,
-            "valid_inds": valid_sample,
-            "invalid_inds": invalid_sample
         }
 
-    def losses(self, logits_pred, reg_pred, id_vec_pred, locations, gt_instances, top_feats=None,):
+    def losses(self, logits_pred, reg_pred, ctrness_pred, id_vec_pred, locations, gt_instances, top_feats=None,):
         """
         Return the losses from a set of FCOS predictions and their associated ground-truth.
 
@@ -315,13 +307,6 @@ class FCOSOutputs(nn.Module):
             x.reshape(-1) for x in training_targets["fpn_levels"]
         ], dim=0)
 
-        instances.valid_inds = cat([
-            x.reshape(-1) for x in training_targets["valid_inds"]
-        ])
-        instances.invalid_inds = cat([
-            x.reshape(-1) for x in training_targets["invalid_inds"]
-        ])
-
         instances.logits_pred = cat([
             # Reshape: (N, C, Hi, Wi) -> (N, Hi, Wi, C) -> (N*Hi*Wi, C)
             x.permute(0, 2, 3, 1).reshape(-1, self.num_classes) for x in logits_pred
@@ -330,7 +315,10 @@ class FCOSOutputs(nn.Module):
             # Reshape: (N, B, Hi, Wi) -> (N, Hi, Wi, B) -> (N*Hi*Wi, B)
             x.permute(0, 2, 3, 1).reshape(-1, 4) for x in reg_pred
         ], dim=0,)
-
+        instances.ctrness_pred = cat([
+            # Reshape: (N, 1, Hi, Wi) -> (N*Hi*Wi,)
+            x.permute(0, 2, 3, 1).reshape(-1) for x in ctrness_pred
+        ], dim=0,)
         instances.identity_pred = cat([
             # Reshape: (N, 1, Hi, Wi) -> (N*Hi*Wi,)
             x.permute(0, 2, 3, 1).reshape(-1) for x in id_vec_pred
@@ -351,6 +339,7 @@ class FCOSOutputs(nn.Module):
         labels = instances.labels.flatten()
 
         pos_inds = torch.nonzero(labels != num_classes).squeeze(1)
+        neg_inds = torch.nonzero(labels == num_classes).squeeze(1)
         num_pos_local = pos_inds.numel()
         num_gpus = get_world_size()
         total_num_pos = reduce_sum(pos_inds.new_tensor([num_pos_local])).item()
@@ -368,62 +357,42 @@ class FCOSOutputs(nn.Module):
             reduction="sum",
         ) / num_pos_avg
         
-        """
-        identity_loss = nn.TripletMarginLoss(reduction="sum")(
-            
+        neg_instances = instances[neg_inds]
+        negative_identity_mean_loss = nn.SmoothL1Loss(reduction="mean")(
+            instances.identity_pred.mean(),
+            torch.zeros_like(neg_instances.identity_pred.mean()),
         )
-        """
-
-        #valid_inds = ((instances.reg_targets < 0).sum(axis=1) == 0).nonzero().squeeze(1)
-        valid_inds = instances.valid_inds.nonzero().squeeze(1)
-        total_num_valid = reduce_sum(valid_inds.new_tensor([valid_inds.numel()])).item()
-        num_valid_avg = max(total_num_valid / num_gpus, 1.0)
-
-        #invalid_inds = ((instances.reg_targets < 0).sum(axis=1) > 0).nonzero().squeeze(1) 
-        invalid_inds = instances.invalid_inds.nonzero().squeeze(1)
-        total_num_invalid = reduce_sum(invalid_inds.new_tensor([invalid_inds.numel()])).item()
-        num_invalid_avg = max(total_num_invalid / num_gpus, 1.0)
-
-        invalid_instance = instances[invalid_inds]
-        invalid_instance.pos_inds = invalid_inds
-
-        valid_instance = instances[valid_inds]
-        valid_instance.pos_inds = valid_inds
+        negative_identity_std_loss = nn.SmoothL1Loss(reduction="mean")(
+            neg_instances.identity_pred.std(),
+            0.1 * torch.ones_like(neg_instances.identity_pred.std()),
+        )
 
         instances = instances[pos_inds]
         instances.pos_inds = pos_inds
 
-        #ctrness_targets = compute_ctrness_targets(instances.reg_targets)
-        ctrness_targets = compute_pi_diag_targets(valid_instance.reg_targets)
-
-        positive_ctrness_targets = compute_pi_diag_targets(instances.reg_targets)
-        ctrness_targets_sum = positive_ctrness_targets.sum()
+        ctrness_targets = compute_ctrness_targets(instances.reg_targets)
+        ctrness_targets_sum = ctrness_targets.sum()
         loss_denorm = max(reduce_sum(ctrness_targets_sum).item() / num_gpus, 1e-6)
-        instances.gt_ctrs = positive_ctrness_targets
+        instances.gt_ctrs = ctrness_targets
+
+        positive_identity_loss = None
 
         if pos_inds.numel() > 0:
             reg_loss = self.loc_loss_func(
                 instances.reg_pred,
                 instances.reg_targets,
-                positive_ctrness_targets
+                ctrness_targets
             ) / loss_denorm
 
-            ctrness_loss = torch.nn.MSELoss(reduction="none")(
-                valid_instance.ctrness_pred.sigmoid(),
+            ctrness_loss = torch.nn.MSELoss(reduction="sum")(
+                instances.ctrness_pred.sigmoid(),
                 ctrness_targets
-            ) / num_valid_avg
+            ) / num_pos_avg
 
-            ctrness_loss *= torch.abs(valid_instance.ctrness_pred.sigmoid() -  ctrness_targets).detach()
-            ctrness_loss = ctrness_loss.sum()
-
-            ctrness_neg_loss = torch.nn.MSELoss(reduction="none")(
-                invalid_instance.ctrness_pred.sigmoid(),
-                torch.zeros_like(invalid_instance.ctrness_pred)
-            ) / num_invalid_avg
-
-            ctrness_neg_loss *= invalid_instance.ctrness_pred.sigmoid().detach()
-            ctrness_neg_loss = ctrness_neg_loss.sum()
-
+            positive_identity_loss = self.identity_loss_func(
+                instances.identity_pred,
+                instances.gt_inds,
+            )
         else:
             reg_loss = instances.reg_pred.sum() * 0
             ctrness_loss = instances.ctrness_pred.sum() * 0
@@ -432,7 +401,9 @@ class FCOSOutputs(nn.Module):
             "loss_fcos_cls": class_loss,
             "loss_fcos_loc": reg_loss,
             "loss_fcos_ctr": ctrness_loss,
-            "loss_fcos_inv_ctr": ctrness_neg_loss,
+            #"loss_negative_identity_mean": negative_identity_mean_loss,
+            #"loss_negative_identity_std": negative_identity_std_loss,
+            "loss_positive_identity": positive_identity_loss,
         }
         extras = {
             "instances": instances,
