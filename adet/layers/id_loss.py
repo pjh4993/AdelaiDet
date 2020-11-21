@@ -48,35 +48,9 @@ class IDLoss(nn.Module):
         object_std_j = torch.abs(object_std.transpose(1,0).repeat(object_num,1) * V_dist_detach)
 
         V_iou = (object_std_i + object_std_j) / (V_dist_norm + object_std_i + object_std_j + 1e-5)
-        V_iou = torch.triu(V_iou, diagonal=1)
-        
+        pos_ind = torch.triu_indices(object_num, object_num, offset=1)
+        V_iou = V_iou.mean(dim=-1)[pos_ind[1], pos_ind[0]]
         assert V_iou.isnan().sum() == 0
 
+        V_iou = - (V_iou) * torch.log(1 - V_iou)
         return  V_iou.mean()
-        """
-        object_arange = torch.arange(len(object_group))
-        for i, j in itertools.combinations(object_arange, 2):
-            group_i = pred_id[object_group[i]]
-            group_j = pred_id[object_group[j]]
-
-            if object_group[j].sum() == 0:
-                group_j = torch.zeros(2, device=group_i.device) 
-            
-            proto_i = group_i.mean()
-            proto_j = group_j.mean()
-
-            V_dist = proto_j - proto_i
-            V_dist_norm = torch.abs(torch.norm(V_dist,p=2,dim=0))
-            V_dist = V_dist.div(V_dist_norm.expand_as(V_dist)).detach()
-
-            V_intra_i = torch.abs(group_i.std() * V_dist) if ~group_i.std().isnan() else torch.zeros(1, device=group_i.device).item()
-            V_intra_j = torch.abs(group_j.std() * V_dist) if ~group_j.std().isnan() else torch.zeros(1, device=group_j.device).item()
-
-            V_iou = (V_intra_i + V_intra_j) / (V_dist_norm + V_intra_i + V_intra_j)
-
-            assert ~V_iou.isnan()
-            D_ratio.append(V_iou)
-               
-        return torch.stack(D_ratio).mean()
-        """
-        
