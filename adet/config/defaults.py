@@ -54,6 +54,7 @@ _C.MODEL.FCOS.POS_RADIUS = 1.5
 _C.MODEL.FCOS.LOC_LOSS_TYPE = 'giou'
 _C.MODEL.FCOS.ID_LOSS_TYPE = '.'
 _C.MODEL.FCOS.ID_THRESHOLD = 0.1
+_C.MODEL.FCOS.ID_DIM = 1
 _C.MODEL.FCOS.YIELD_PROPOSAL = False
 
 # ---------------------------------------------------------------------------- #

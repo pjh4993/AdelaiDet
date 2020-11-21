@@ -82,6 +82,7 @@ class FCOSOutputs(nn.Module):
 
         self.num_classes = cfg.MODEL.FCOS.NUM_CLASSES
         self.strides = cfg.MODEL.FCOS.FPN_STRIDES
+        self.id_dim = cfg.MODEL.FCOS.ID_DIM
 
         # generate sizes of interest
         soi = []
@@ -321,7 +322,7 @@ class FCOSOutputs(nn.Module):
         ], dim=0,)
         instances.identity_pred = cat([
             # Reshape: (N, 1, Hi, Wi) -> (N*Hi*Wi,)
-            x.permute(0, 2, 3, 1).reshape(-1) for x in id_vec_pred
+            x.permute(0, 2, 3, 1).reshape(-1, self.id_dim) for x in id_vec_pred
         ], dim=0,)
 
         if len(top_feats) > 0:
@@ -337,6 +338,7 @@ class FCOSOutputs(nn.Module):
         assert num_classes == self.num_classes
 
         labels = instances.labels.flatten()
+        gt_object = instances.gt_inds
 
         pos_inds = torch.nonzero(labels != num_classes).squeeze(1)
         neg_inds = torch.nonzero(labels == num_classes).squeeze(1)
@@ -370,6 +372,8 @@ class FCOSOutputs(nn.Module):
         instances = instances[pos_inds]
         instances.pos_inds = pos_inds
 
+        assert (instances.gt_inds.unique() != gt_object.unique()).sum() == 0
+
         ctrness_targets = compute_ctrness_targets(instances.reg_targets)
         ctrness_targets_sum = ctrness_targets.sum()
         loss_denorm = max(reduce_sum(ctrness_targets_sum).item() / num_gpus, 1e-6)
@@ -389,6 +393,12 @@ class FCOSOutputs(nn.Module):
                 ctrness_targets
             ) / num_pos_avg
 
+            """
+            positive_identity_loss = self.identity_loss_func(
+                instances.identity_pred,
+                instances.gt_inds,
+            ) / (num_pos_avg**2)
+            """
             positive_identity_loss = self.identity_loss_func(
                 instances.identity_pred,
                 instances.gt_inds,

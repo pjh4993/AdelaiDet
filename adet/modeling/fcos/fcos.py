@@ -141,6 +141,7 @@ class FCOSHead(nn.Module):
                         }
         norm = None if cfg.MODEL.FCOS.NORM == "none" else cfg.MODEL.FCOS.NORM
         self.num_levels = len(input_shape)
+        self.id_dim = cfg.MODEL.FCOS.ID_DIM
 
         in_channels = [s.channels for s in input_shape]
         assert len(set(in_channels)) == 1, "Each level must have the same channel!"
@@ -191,7 +192,7 @@ class FCOSHead(nn.Module):
             stride=1, padding=1
         )
         self.identity = nn.Conv2d(
-            in_channels, 1, kernel_size=3,
+            in_channels, self.id_dim, kernel_size=3,
             stride=1, padding=1
         )
 
