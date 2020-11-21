@@ -233,7 +233,7 @@ class FCOSHead(nn.Module):
                 bbox_towers.append(bbox_tower)
 
             logits.append(self.cls_logits(cls_tower))
-            identity.append(self.identity(identity_tower))
+            identity.append(self.identity(identity_tower).sigmoid())
 
             if self.ctrness_on_bbox:
                 ctrness.append(self.ctrness(bbox_tower))

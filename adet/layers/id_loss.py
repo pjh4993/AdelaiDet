@@ -41,26 +41,22 @@ class IDLoss(nn.Module):
                 group_j = pred_id[object_group[j]]
 
                 if object_group[j].sum() == 0:
-                    group_j = torch.zeros_like(group_i) 
-
+                    group_j = torch.zeros(2, device=group_i.device) 
+                
                 proto_i = group_i.mean()
                 proto_j = group_j.mean()
 
                 V_dist = proto_j - proto_i
                 V_dist_norm = torch.abs(torch.norm(V_dist,p=2,dim=0))
-                V_dist = V_dist.div(V_dist_norm.expand_as(V_dist))
-                
-                D_i_ratio = torch.abs((group_i.std() * V_dist) / V_dist_norm)
-                if D_i_ratio > self.hard_threshold:
-                    D_ratio.append(D_i_ratio) 
+                V_dist = V_dist.div(V_dist_norm.expand_as(V_dist)).detach()
 
-                if object_group[j].sum():
-                    D_j_ratio = torch.abs((group_j.std() * V_dist) / V_dist_norm)
-                    if D_j_ratio > self.hard_threshold:
-                        D_ratio.append(D_j_ratio) 
+                V_intra_i = torch.abs(group_i.std() * V_dist) if ~group_i.std().isnan() else torch.zeros(1, device=group_i.device).item()
+                V_intra_j = torch.abs(group_j.std() * V_dist) if ~group_j.std().isnan() else torch.zeros(1, device=group_j.device).item()
 
-        if len(D_ratio):
-            return torch.stack(D_ratio).mean()
-        else:
-            return torch.zeros_like(proto_i)
+                V_iou = (V_intra_i + V_intra_j) / (V_dist_norm + V_intra_i + V_intra_j)
+
+                assert ~V_iou.isnan()
+                D_ratio.append(V_iou)
+               
+        return torch.stack(D_ratio).mean()
         
