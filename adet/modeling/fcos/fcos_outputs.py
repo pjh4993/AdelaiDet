@@ -32,8 +32,8 @@ Naming convention:
     reg_targets: refers to the 4-d (left, top, right, bottom) distances that parameterize the ground-truth box.
 
     logits_pred: predicted classification scores in [-inf, +inf];
-    
-    reg_pred: the predicted (left, top, right, bottom), corresponding to reg_targets 
+
+    reg_pred: the predicted (left, top, right, bottom), corresponding to reg_targets
 
     ctrness_pred: predicted centerness scores
 
@@ -53,7 +53,7 @@ def compute_pi_diag_targets(reg_targets):
     if len(reg_targets) == 0:
         return reg_targets.new_zeros(len(reg_targets))
     diag = (reg_targets[:,[0,2]].sum(axis=1) ** 2 + reg_targets[:,[1,3]].sum(axis=1) **2)/4
-    anchor_loc = torch.cat(((reg_targets[:,[0,2]].sum(axis=1)/2 - reg_targets[:,0]).unsqueeze(1), 
+    anchor_loc = torch.cat(((reg_targets[:,[0,2]].sum(axis=1)/2 - reg_targets[:,0]).unsqueeze(1),
                        (reg_targets[:,[1,3]].sum(axis=1)/2 - reg_targets[:,1]).unsqueeze(1)), dim=1)
     #anchor_loc /= anchor_loc.norm(dim=1)
     diag_rate = (anchor_loc[:,0] ** 2 + anchor_loc[:,1] **2) / diag
@@ -343,9 +343,15 @@ class FCOSOutputs(nn.Module):
         pos_inds = torch.nonzero(labels != num_classes).squeeze(1)
         neg_inds = torch.nonzero(labels == num_classes).squeeze(1)
         num_pos_local = pos_inds.numel()
+        num_neg_local = neg_inds.numel()
+
         num_gpus = get_world_size()
+
         total_num_pos = reduce_sum(pos_inds.new_tensor([num_pos_local])).item()
+        total_num_neg = reduce_sum(neg_inds.new_tensor([num_neg_local])).item()
+
         num_pos_avg = max(total_num_pos / num_gpus, 1.0)
+        num_neg_avg = max(total_num_neg / num_gpus, 1.0)
 
         # prepare one_hot
         class_target = torch.zeros_like(instances.logits_pred)
@@ -358,21 +364,29 @@ class FCOSOutputs(nn.Module):
             gamma=self.focal_loss_gamma,
             reduction="sum",
         ) / num_pos_avg
-        
-        neg_instances = instances[neg_inds]
-        negative_identity_mean_loss = nn.SmoothL1Loss(reduction="mean")(
-            instances.identity_pred.mean(),
-            torch.zeros_like(neg_instances.identity_pred.mean()),
-        )
+
+        #neg_instances = instances[neg_inds]
+
+        neg_id = instances[neg_inds].identity_pred
+        negative_identity_mean_loss = sigmoid_focal_loss_jit(
+            neg_id,
+            torch.zeros_like(neg_id),
+            alpha=self.focal_loss_alpha,
+            gamma=self.focal_loss_gamma,
+            reduction="sum",
+        ) / num_neg_avg
+
+        """
         negative_identity_std_loss = nn.SmoothL1Loss(reduction="mean")(
             neg_instances.identity_pred.std(),
             0.1 * torch.ones_like(neg_instances.identity_pred.std()),
         )
+        """
 
         instances = instances[pos_inds]
         instances.pos_inds = pos_inds
 
-        assert (instances.gt_inds.unique() != gt_object.unique()).sum() == 0
+        #assert (instances.gt_inds.unique() != gt_object.unique()).sum() == 0
 
         ctrness_targets = compute_ctrness_targets(instances.reg_targets)
         ctrness_targets_sum = ctrness_targets.sum()
@@ -420,7 +434,7 @@ class FCOSOutputs(nn.Module):
             "loss_denorm": loss_denorm
         }
         return extras, losses
- 
+
     def predict_proposals(
             self, logits_pred, reg_pred, ctrness_pred,
             locations, image_sizes, top_feats=None
@@ -507,7 +521,7 @@ class FCOSOutputs(nn.Module):
             per_box_cls = logits_pred[i]
             per_candidate_inds = candidate_inds[i]
             per_box_cls = per_box_cls[per_candidate_inds]
-            
+
             per_candidate_nonzeros = per_candidate_inds.nonzero()
             per_box_loc = per_candidate_nonzeros[:, 0]
             per_class = per_candidate_nonzeros[:, 1]
