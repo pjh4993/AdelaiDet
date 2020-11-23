@@ -56,13 +56,13 @@ class NLOSDatasetMapper(DatasetMapper):
     def __init__(self, cfg, is_train=True):
         super().__init__(cfg, is_train)
 
-        """
         # Rebuild augmentations
         logger.info(
             "Rebuilding the augmentations. The previous augmentations will be overridden."
         )
         self.augmentation = build_augmentation(cfg, is_train)
 
+        """
         if cfg.INPUT.CROP.ENABLED and is_train:
             self.augmentation.insert(
                 0,
@@ -93,30 +93,30 @@ class NLOSDatasetMapper(DatasetMapper):
         dataset_dict = copy.deepcopy(dataset_dict)  # it will be modified by code below
         # USER: Write your own image loading if it's not from a file
 
-        #gt_image = None
+        gt_image = None
         laser_image = None
-        #depth_image = None
+        depth_image = None
         try:
-            #gt_image = utils.read_image(dataset_dict["gt_image"]["name"], format=self.image_format)
+            gt_image = utils.read_image(dataset_dict["gt_image"]["name"], format=self.image_format)
             laser_image = [utils.read_image(x, format=self.image_format) for x in dataset_dict["laser_image"]["name"]]
-            #depth_image = utils.read_image(dataset_dict["depth_image"]["name"], format=self.image_format)
+            depth_image = utils.read_image(dataset_dict["depth_image"]["name"], format=self.image_format)
         except:
             print("OS error for image")
-        #utils.check_nlos_image_size(dataset_dict, gt_image, 'gt_image')
+        utils.check_nlos_image_size(dataset_dict, gt_image, 'gt_image')
         [utils.check_nlos_image_size(dataset_dict, x, 'laser_image') for x in laser_image]
-        #utils.check_nlos_image_size(dataset_dict, depth_image, 'depth_image')
+        utils.check_nlos_image_size(dataset_dict, depth_image, 'depth_image')
 
-        #aug_input = T.StandardAugInput(image, sem_seg=sem_seg_gt)
-        #transforms = aug_input.apply_augmentations(self.augmentations)
-        #image, sem_seg_gt = aug_input.image, aug_input.sem_seg
+        laser_aug_input = [T.StandardAugInput(image) for image in laser_image]
+        [aug_input.apply_augmentations(self.augmentations) for aug_input in laser_aug_input]
+        laser_image = [aug_input.image for aug_input in laser_aug_input]
 
         image_shape = laser_image[0].shape[:2]  # h, w
         # Pytorch's dataloader is efficient on torch.Tensor due to shared-memory,
         # but not efficient on large generic data structures due to the use of pickle & mp.Queue.
         # Therefore it's important to use torch.Tensor.
 
-        #dataset_dict["gt_image"] = torch.as_tensor(np.ascontiguousarray(gt_image.transpose(2, 0, 1)))
-        #dataset_dict["depth_image"] = torch.as_tensor(np.ascontiguousarray(depth_image.transpose(2, 0, 1)))
+        dataset_dict["gt_image"] = torch.as_tensor(np.ascontiguousarray(gt_image.transpose(2, 0, 1)))
+        dataset_dict["depth_image"] = torch.as_tensor(np.ascontiguousarray(depth_image.transpose(2, 0, 1)))
 
         laser_idx = [[int(idx[2:]) for idx in laser_name.split('.')[0].split('_')[2:]] for laser_name in dataset_dict["laser_image"]["name"]]
         dataset_dict["laser_idx"] = np.array(laser_idx)
