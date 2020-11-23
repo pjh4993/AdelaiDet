@@ -8,6 +8,9 @@ MODEL:
     IN_FEATURES: ["stage3", "stage4", "stage5"]
   PROPOSAL_GENERATOR:
     NAME: "FCOS"
+  FCOS:
+    IN_FEATURES: ["p5", "p6", "p7"]
+    FPN_STRIDES: [32, 64, 128]
   PIXEL_MEAN: [ 2.8969,  3.9573, 11.9117]
   PIXEL_STD: [0.7269, 1.5346, 5.0199]
 DATASETS:
@@ -16,12 +19,11 @@ DATASETS:
 SOLVER:
   IMS_PER_BATCH: 1
   BASE_LR: 0.01  # Note that RetinaNet uses a different default learning rate
-  STEPS: (60000, 80000)
-  MAX_ITER: 90000
+  STEPS: (20000, 25000)
+  MAX_ITER: 30000
 INPUT:
   NLOS: True
-  MIN_SIZE_TRAIN: (320)
+  MIN_SIZE_TRAIN: (32,)
   HFLIP_TRAIN: False
-
 DATALOADER:
   ASPECT_RATIO_GROUPING: False

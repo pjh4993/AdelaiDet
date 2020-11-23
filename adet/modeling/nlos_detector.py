@@ -8,6 +8,8 @@ from detectron2.utils.events import get_event_storage
 from detectron2.utils.logger import log_first_n
 from detectron2.modeling.postprocessing import detector_postprocess as d2_postprocesss
 from detectron2.structures import ImageList
+from detectron2.modeling.backbone import build_backbone
+from detectron2.modeling.proposal_generator import build_proposal_generator
  
 
 def detector_postprocess(results, output_height, output_width, mask_threshold=0.5):
@@ -43,6 +45,10 @@ class NLOSDetector(ProposalNetwork):
     Same as :class:`detectron2.modeling.ProposalNetwork`.
     Uses "instances" as the return key instead of using "proposal".
     """
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        self.laser_grid = cfg.NLOS.LASER_GRID
+
     def forward(self, batched_inputs):
         """
         Args:
@@ -54,15 +60,18 @@ class NLOSDetector(ProposalNetwork):
                 The dict contains one key "proposals" whose value is a
                 :class:`Instances` with keys "proposal_boxes" and "objectness_logits".
         """
-        laser_image_groups = [x["images"].to(self.device) for x in batched_inputs]
-        images = [((x - self.pixel_mean) / self.pixel_std) for x in laser_image_groups]
+        laser_image_groups = [x["laser_images"].to(self.device) for x in batched_inputs]
+        laser_image_groups = [((x - self.pixel_mean) / self.pixel_std) for x in laser_image_groups]
 
-        for batch in images:
-            for laser_pos in range(batch.shape[0]):
-                signel_laser_image = ImageList.from_tensors(batch[laser_pos], self.backbone.size_divisibility)
-                features = self.backbone(signel_laser_image.tensor)
-        features = self.backbone(images.tensor)
+        gt_images = [x["gt_image"].to(self.device) for x in batched_inputs]
 
+        laser_grid_batch = []
+        for laser_images in laser_image_groups:
+            single_laser_image = ImageList.from_tensors([laser_images], self.backbone.size_divisibility)
+            features = self.backbone(single_laser_image.tensor.squeeze(0))
+            features = {k : v.reshape(2, self.laser_grid, self.laser_grid,-1) for k, v in features.items()}
+            laser_grid_batch.append(features)
+ 
         if "instances" in batched_inputs[0]:
             gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
         elif "targets" in batched_inputs[0]:
@@ -72,7 +81,10 @@ class NLOSDetector(ProposalNetwork):
             gt_instances = [x["targets"].to(self.device) for x in batched_inputs]
         else:
             gt_instances = None
-        proposals, proposal_losses = self.proposal_generator(images, features, gt_instances)
+
+        #some network for generate feature for proposal generator
+
+        proposals, proposal_losses = self.proposal_generator(gt_images, features, gt_instances)
         # In training, the proposals are not useful at all but we generate them anyway.
         # This makes RPN-only models about 5% slower.
         if self.training:
@@ -80,7 +92,7 @@ class NLOSDetector(ProposalNetwork):
 
         processed_results = []
         for results_per_image, input_per_image, image_size in zip(
-            proposals, batched_inputs, images.image_sizes
+            proposals, batched_inputs, gt_images.image_sizes
         ):
             height = input_per_image.get("height", image_size[0])
             width = input_per_image.get("width", image_size[1])

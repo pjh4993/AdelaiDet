@@ -48,7 +48,7 @@ class OneStageDetector(ProposalNetwork):
         processed_results = [{"instances": r["proposals"]} for r in processed_results]
         return processed_results
 
-
+ 
 def build_top_module(cfg):
     top_type = cfg.MODEL.TOP_MODULE.NAME
     if top_type == "conv":

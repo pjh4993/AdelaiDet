@@ -120,7 +120,7 @@ class NLOSDatasetMapper(DatasetMapper):
 
         laser_idx = [[int(idx[2:]) for idx in laser_name.split('.')[0].split('_')[2:]] for laser_name in dataset_dict["laser_image"]["name"]]
         dataset_dict["laser_idx"] = np.array(laser_idx)
-        dataset_dict["images"] = torch.cat([torch.as_tensor(np.ascontiguousarray(x.transpose(2,0,1))).unsqueeze(0) for x in laser_image], dim=0)
+        dataset_dict["laser_images"] = torch.cat([torch.as_tensor(np.ascontiguousarray(x.transpose(2,0,1))).unsqueeze(0) for x in laser_image], dim=0)
 
         # Pytorch's dataloader is efficient on torch.Tensor due to shared-memory,
         # but not efficient on large generic data structures due to the use of pickle & mp.Queue.
@@ -150,7 +150,7 @@ class NLOSDatasetMapper(DatasetMapper):
 
         return dataset_dict
 
-
+ 
 class DatasetMapperWithBasis(DatasetMapper):
     """
     This caller enables the default Detectron2 mapper to read an additional basis semantic label
