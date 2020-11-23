@@ -19,6 +19,15 @@ _C.INPUT.NLOS = False
 _C.NLOS = CN()
 _C.NLOS.LASER_GRID = 5
 
+_C.MODEL.NLOS_CONVERTER = CN()
+_C.MODEL.NLOS_CONVERTER.NAME = "conv_fc_nlos_converter"
+_C.MODEL.NLOS_CONVERTER.IN_FEATURES = ["p3"]
+_C.MODEL.NLOS_CONVERTER.NUM_CONVS = 2
+_C.MODEL.NLOS_CONVERTER.INT_CONV_CHANNEL = 256
+_C.MODEL.NLOS_CONVERTER.IN_FC_CHANNELS = [1,1,1]
+_C.MODEL.NLOS_CONVERTER.OUT_FC_CHANNELS = [1,1,1]
+_C.MODEL.NLOS_CONVERTER.NORM = "GN"
+
 # ---------------------------------------------------------------------------- #
 # FCOS Head
 # ---------------------------------------------------------------------------- #

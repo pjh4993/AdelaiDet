@@ -10,7 +10,7 @@ from detectron2.modeling.postprocessing import detector_postprocess as d2_postpr
 from detectron2.structures import ImageList
 from detectron2.modeling.backbone import build_backbone
 from detectron2.modeling.proposal_generator import build_proposal_generator
- 
+from adet.modeling.nlos_converter import build_nlos_converter
 
 def detector_postprocess(results, output_height, output_width, mask_threshold=0.5):
     """
@@ -48,6 +48,8 @@ class NLOSDetector(ProposalNetwork):
     def __init__(self, cfg):
         super().__init__(cfg)
         self.laser_grid = cfg.NLOS.LASER_GRID
+        self.nlos_converter = build_nlos_converter(cfg, self.backbone.output_shape())
+        self.proposal_generator = build_proposal_generator(cfg, self.nlos_converter.output_shape())
 
     def forward(self, batched_inputs):
         """
@@ -69,7 +71,8 @@ class NLOSDetector(ProposalNetwork):
         for laser_images in laser_image_groups:
             single_laser_image = ImageList.from_tensors([laser_images], self.backbone.size_divisibility)
             features = self.backbone(single_laser_image.tensor.squeeze(0))
-            features = {k : v.reshape(2, self.laser_grid, self.laser_grid,-1) for k, v in features.items()}
+            #_, H, W, C = features[0].shape
+            #features = {k : v.reshape(2, self.laser_grid, self.laser_grid, H, W, C) for k, v in features.items()}
             laser_grid_batch.append(features)
  
         if "instances" in batched_inputs[0]:
@@ -84,7 +87,9 @@ class NLOSDetector(ProposalNetwork):
 
         #some network for generate feature for proposal generator
 
-        proposals, proposal_losses = self.proposal_generator(gt_images, features, gt_instances)
+        detection_features = self.nlos_converter(laser_grid_batch)
+
+        proposals, proposal_losses = self.proposal_generator(gt_images, detection_features, gt_instances)
         # In training, the proposals are not useful at all but we generate them anyway.
         # This makes RPN-only models about 5% slower.
         if self.training:
