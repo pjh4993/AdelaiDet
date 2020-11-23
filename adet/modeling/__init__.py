@@ -3,6 +3,7 @@ from .fcos import FCOS
 from .blendmask import BlendMask
 from .backbone import build_fcos_resnet_fpn_backbone
 from .one_stage_detector import OneStageDetector, OneStageRCNN
+from .nlos_detector import NLOSDetector
 from .roi_heads.text_head import TextHead
 from .batext import BAText
 from .MEInst import MEInst

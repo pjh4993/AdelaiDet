@@ -10,6 +10,7 @@ _C.MODEL.BACKBONE.ANTI_ALIAS = False
 _C.MODEL.RESNETS.DEFORM_INTERVAL = 1
 _C.INPUT.HFLIP_TRAIN = True
 _C.INPUT.CROP.CROP_INSTANCE = True
+_C.INPUT.NLOS = False
 
 # ---------------------------------------------------------------------------- #
 # FCOS Head

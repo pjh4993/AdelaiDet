@@ -6,7 +6,7 @@ from detectron2.modeling import ProposalNetwork, GeneralizedRCNN
 from detectron2.utils.events import get_event_storage
 from detectron2.utils.logger import log_first_n
 from detectron2.modeling.postprocessing import detector_postprocess as d2_postprocesss
-
+ 
 
 def detector_postprocess(results, output_height, output_width, mask_threshold=0.5):
     """
@@ -45,7 +45,7 @@ class OneStageDetector(ProposalNetwork):
         if self.training:
             return super().forward(batched_inputs)
         processed_results = super().forward(batched_inputs)
-        processed_results = [{"one_stage_instances": r["proposals"]} for r in processed_results]
+        processed_results = [{"instances": r["proposals"]} for r in processed_results]
         return processed_results
 
 

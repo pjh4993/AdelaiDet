@@ -5,8 +5,8 @@ MODEL:
     DEPTH: 50
 OUTPUT_DIR: "output/fcos/R_50_1x"
 DATASETS:
-  TRAIN: ("nlos_train",)
-  TEST: ("nlos_train",)
+  TRAIN: ("nlos_gt_train",)
+  TEST: ("nlos_gt_train",)
 MODEL:
   FCOS:
     NUM_CLASSES: 1
