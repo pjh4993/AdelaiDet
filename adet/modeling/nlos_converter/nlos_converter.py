@@ -78,12 +78,14 @@ class conv_fc_nlos_converter(nn.Module):
 
         for x in features:
             x = [x[f] for f in self.in_features]
-            for k, v, fc, output_shape in zip(self.in_features, x, self.fc_per_level, self.head_configs["fc"][1]):
-                t = F.relu(self.conv_tower(v)).reshape(-1)
-                converted_feature[k].append(fc(t).reshape(1, output_shape[1], output_shape[0], self.int_conv_channel))
+            for k, v in zip(self.in_features, x):#, self.fc_per_level, self.head_configs["fc"][1]):
+                t = F.relu(self.conv_tower(v)).reshape(1,-1)
+                converted_feature[k].append(t)
 
-        for k, v in converted_feature.items():
-            converted_feature[k] = torch.cat(converted_feature[k], dim=0).permute(0,3,1,2)
+        for k, fc, output_shape in zip(self.in_features, self.fc_per_level, self.head_configs["fc"][1]):
+            t = torch.cat(converted_feature[k], dim=0)
+            N = t.shape[0]
+            converted_feature[k] = fc(t).reshape(N, output_shape[1], output_shape[0], self.int_conv_channel).permute(0,3,1,2)
 
         return converted_feature
     
