@@ -104,4 +104,6 @@ class NLOSDetector(ProposalNetwork):
             width = input_per_image.get("width", image_size[1])
             r = detector_postprocess(results_per_image, height, width)
             processed_results.append({"proposals": r})
+
+        processed_results = [{"instances": r["proposals"]} for r in processed_results]
         return processed_results
