@@ -33,6 +33,7 @@ from detectron2.evaluation import (
     LVISEvaluator,
     PascalVOCDetectionEvaluator,
     SemSegEvaluator,
+    NLOSEvaluator,
     verify_results,
 )
 from detectron2.modeling import GeneralizedRCNNWithTTA
@@ -164,7 +165,7 @@ class Trainer(DefaultTrainer):
         if evaluator_type == "text":
             return TextEvaluator(dataset_name, cfg, True, output_folder)
         if evaluator_type == "nlos":
-            return NotImplementedError
+            return NLOSEvaluator(dataset_name, cfg, True, output_folder)
         if len(evaluator_list) == 0:
             raise NotImplementedError(
                 "no Evaluator for the dataset {} with the type {}".format(

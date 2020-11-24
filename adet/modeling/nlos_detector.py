@@ -66,6 +66,7 @@ class NLOSDetector(ProposalNetwork):
         laser_image_groups = [((x - self.pixel_mean) / self.pixel_std) for x in laser_image_groups]
 
         gt_images = [x["gt_image"].to(self.device) for x in batched_inputs]
+        gt_images = ImageList.from_tensors(gt_images, self.backbone.size_divisibility)
 
         laser_grid_batch = []
         for laser_images in laser_image_groups:
