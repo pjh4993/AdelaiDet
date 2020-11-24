@@ -32,7 +32,7 @@ class conv_fc_nlos_converter(nn.Module):
         assert len(set(in_channels)) == 1, "Each level must have the same channel!"
         in_channels = in_channels[0]
 
-        assert self.int_conv_channel % 32 == 0
+        #assert self.int_conv_channel % 32 == 0
 
         conv_tower = []
         for _ in range(head_configs["conv"]):
@@ -49,7 +49,7 @@ class conv_fc_nlos_converter(nn.Module):
 
         fc_per_level = []
         for in_fc_channel, out_fc_channel, k in zip(head_configs["fc"][0], head_configs["fc"][1], self.in_features):
-            fc_layer = nn.Linear(in_fc_channel * self.int_conv_channel * 2 * (self.laser_grid **2), out_fc_channel[0] * out_fc_channel[1] * self.int_conv_channel)
+            fc_layer = nn.Linear(in_fc_channel * (self.laser_grid **2), out_fc_channel[0] * out_fc_channel[1])
             torch.nn.init.xavier_uniform_(fc_layer.weight)
             torch.nn.init.constant_(fc_layer.bias, 0)
             fc_per_level.append(fc_layer)
@@ -79,13 +79,15 @@ class conv_fc_nlos_converter(nn.Module):
         for x in features:
             x = [x[f] for f in self.in_features]
             for k, v in zip(self.in_features, x):#, self.fc_per_level, self.head_configs["fc"][1]):
-                t = F.relu(self.conv_tower(v)).reshape(1,-1)
-                converted_feature[k].append(t)
+                t = F.relu(self.conv_tower(v))
+                t = t[torch.arange(start=0, end=50, step=2)] + t[torch.arange(start=1, end=50, step=2)]
+                converted_feature[k].append(t.permute(1,0,2,3).reshape(1,self.int_conv_channel,-1))
+        
 
         for k, fc, output_shape in zip(self.in_features, self.fc_per_level, self.head_configs["fc"][1]):
             t = torch.cat(converted_feature[k], dim=0)
             N = t.shape[0]
-            converted_feature[k] = fc(t).reshape(N, output_shape[1], output_shape[0], self.int_conv_channel).permute(0,3,1,2)
+            converted_feature[k] = fc(t).reshape(N, self.int_conv_channel, output_shape[1], output_shape[0])
 
         return converted_feature
     
