@@ -1,17 +1,5 @@
-from collections import defaultdict
-from typing import List, Dict
-import torch
-from torch import nn
-from torch.nn import functional as F
-import math
-
-from detectron2.layers import ShapeSpec, NaiveSyncBatchNorm
-from adet.modeling.nlos_converter.build import NLOS_CONVERTER_REGISTRY
-from adet.layers import DFConv2d, NaiveGroupNorm
-from adet.utils.comm import compute_locations
-
 @NLOS_CONVERTER_REGISTRY.register()
-class conv_fc_nlos_converter(nn.Module):
+ class conv_fc_nlos_converter(nn.Module):
  
  
      def __init__(self, cfg, input_shape: Dict[str, ShapeSpec]):
