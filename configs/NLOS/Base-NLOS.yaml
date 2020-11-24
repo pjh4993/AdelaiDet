@@ -9,12 +9,13 @@ MODEL:
   NLOS_CONVERTER:
     NAME: "conv_fc_nlos_converter"
     NUM_CONVS: 1
-    INT_CONV_CHANNEL: 32
+    INT_CONV_CHANNEL: 1
     #IN_FC_CHANNELS:  [ 2 * 8 * 256, 1 * 4 * 256]
     IN_FC_CHANNELS:  [ 16 , 4]
     #OUT_FC_CHANNELS: [ 15 * 20 * 256, 8 * 10 * 256]
     OUT_FC_CHANNELS: [[15,20],[8,15]]
     IN_FEATURES: ["p5", "p6"]
+    NORM: ""
   PROPOSAL_GENERATOR:
     NAME: "FCOS"
   FCOS:
@@ -23,6 +24,7 @@ MODEL:
     NUM_CLASSES: 1
     SIZES_OF_INTEREST: [128]
     INFERENCE_TH_TEST: 0.5
+    NORM: ""
   PIXEL_MEAN: [ 2.8969,  3.9573, 11.9117]
   PIXEL_STD: [0.7269, 1.5346, 5.0199]
 DATASETS:
