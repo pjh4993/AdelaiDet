@@ -49,7 +49,7 @@ class conv_fc_nlos_converter(nn.Module):
 
         fc_per_level = []
         for in_fc_channel, out_fc_channel, k in zip(head_configs["fc"][0], head_configs["fc"][1], self.in_features):
-            fc_layer = nn.Linear(in_fc_channel * (self.laser_grid **2), out_fc_channel[0] * out_fc_channel[1])
+            fc_layer = nn.Linear(in_fc_channel * (self.laser_grid **2) * self.int_conv_channel, out_fc_channel[0] * out_fc_channel[1] * self.int_conv_channel)
             torch.nn.init.xavier_uniform_(fc_layer.weight)
             torch.nn.init.constant_(fc_layer.bias, 0)
             fc_per_level.append(fc_layer)
@@ -81,7 +81,7 @@ class conv_fc_nlos_converter(nn.Module):
             for k, v in zip(self.in_features, x):#, self.fc_per_level, self.head_configs["fc"][1]):
                 t = F.relu(self.conv_tower(v))
                 t = t[torch.arange(start=0, end=50, step=2)] + t[torch.arange(start=1, end=50, step=2)]
-                converted_feature[k].append(t.permute(1,0,2,3).reshape(1,self.int_conv_channel,-1))
+                converted_feature[k].append(t.reshape(1,-1))
         
 
         for k, fc, output_shape in zip(self.in_features, self.fc_per_level, self.head_configs["fc"][1]):
