@@ -8,7 +8,7 @@ MODEL:
     IN_FEATURES: ["stage3", "stage4", "stage5"]
   NLOS_CONVERTER:
     NAME: "conv_fc_nlos_converter"
-    NUM_CONVS: 3
+    NUM_CONVS: 1
     INT_CONV_CHANNEL: 32
     #IN_FC_CHANNELS:  [ 2 * 8 * 256, 1 * 4 * 256]
     IN_FC_CHANNELS:  [ 16 , 4]
@@ -22,6 +22,7 @@ MODEL:
     FPN_STRIDES: [32, 64]
     NUM_CLASSES: 1
     SIZES_OF_INTEREST: [128]
+    INFERENCE_TH_TEST: 0.5
   PIXEL_MEAN: [ 2.8969,  3.9573, 11.9117]
   PIXEL_STD: [0.7269, 1.5346, 5.0199]
 DATASETS:
