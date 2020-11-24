@@ -8,11 +8,11 @@ MODEL:
     IN_FEATURES: ["stage3", "stage4", "stage5"]
   NLOS_CONVERTER:
     NAME: "conv_fc_nlos_converter"
-    NUM_CONVS: 3
+    NUM_CONVS: 1
     INT_CONV_CHANNEL: 32
-    #IN_FC_CHANNELS:  [ 2 * 8 * 256, 1 * 4 * 256]
-    IN_FC_CHANNELS:  [ 16 , 4]
-    #OUT_FC_CHANNELS: [ 15 * 20 * 256, 8 * 10 * 256]
+    IN_FC_CHANNELS:  [16 , 4] #[4 * 16 * 256 2 * 8 * 256, 1 * 4 * 256]
+    #IN_FC_CHANNELS:  [ 60 , 16] #[ 4 * 15 * 256, 2 * 8 * 256]
+    #OUT_FC_CHANNELS: [30 * 40 , 15 * 20 * 256, 8 * 10 * 256]
     OUT_FC_CHANNELS: [[15,20],[8,15]]
     IN_FEATURES: ["p5", "p6"]
   PROPOSAL_GENERATOR:
@@ -28,13 +28,14 @@ DATASETS:
   TRAIN: ("nlos_2020_train",)
   TEST: ("nlos_2020_train",)
 SOLVER:
-  IMS_PER_BATCH: 1
+  IMS_PER_BATCH: 4
   BASE_LR: 0.01  # Note that RetinaNet uses a different default learning rate
-  STEPS: (20000, 25000)
-  MAX_ITER: 30000
+  STEPS: (40000, 50000)
+  MAX_ITER: 60000
 INPUT:
   NLOS: True
   MIN_SIZE_TRAIN: (64,)
+  #MIN_SIZE_TRAIN: (128,)
   HFLIP_TRAIN: False
 DATALOADER:
   ASPECT_RATIO_GROUPING: False
