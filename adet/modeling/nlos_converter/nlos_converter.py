@@ -32,7 +32,7 @@ class conv_fc_nlos_converter(nn.Module):
          assert len(set(in_channels)) == 1, "Each level must have the same channel!"
          in_channels = in_channels[0]
  
-         assert self.int_conv_channel % 32 == 0
+         assert self.int_conv_channel % 32 == 0 or norm == None
  
          conv_tower = []
          for _ in range(head_configs["conv"]):
