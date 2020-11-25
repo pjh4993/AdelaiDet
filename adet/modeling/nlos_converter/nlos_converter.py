@@ -163,7 +163,7 @@ class channel_preserving_nlos_converter(nn.Module):
             for k, v in zip(self.in_features, x):#, self.fc_per_level, self.head_configs["fc"][1]):
                 t = F.relu(self.conv_tower(v))
                 t = t[torch.arange(start=0, end=grid_size * 2, step=2)] + t[torch.arange(start=1, end=grid_size *2, step=2)]
-                t = t.permute(1,0,2,3).reshape(1, -1)
+                t = t.permute(1,0,2,3).reshape(1, self.int_conv_channel,-1)
                 converted_feature[k].append(t)
  
         for k, fc, output_shape in zip(self.in_features, self.fc_per_level, self.head_configs["fc"][1]):

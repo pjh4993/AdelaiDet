@@ -58,3 +58,4 @@ benchmark.sh
 datasets/nlosGT
 demo/input
 data_dict.json
+configs/NLOS/local_test.yaml
