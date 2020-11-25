@@ -1,0 +1,4 @@
+_BASE_: "Base-NLOS.yaml"
+DATASETS:
+  TRAIN: ("nlos_crop_2020_train",)
+  TEST: ("nlos_2020_valid",)
