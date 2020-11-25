@@ -95,7 +95,10 @@ if __name__ == "__main__":
         if cfg.MODEL.KEYPOINT_ON:
             dicts = filter_images_with_few_keypoints(dicts, 1)
         for dic in tqdm.tqdm(dicts):
-            img = utils.read_image(dic["file_name"], "RGB")
+            img = utils.read_image(dic["gt_image"]["name"], "RGB")
+            #img = utils.read_image(dic["file_name"], "RGB")
+            file_name = dic["gt_image"]["name"].split("/")[-2] + ".png"
             visualizer = Visualizer(img, metadata=metadata, scale=scale)
             vis = visualizer.draw_dataset_dict(dic)
-            output(vis, os.path.basename(dic["file_name"]))
+            output(vis, os.path.basename(file_name))
+            #output(vis, os.path.basename(dic["file_name"]))
