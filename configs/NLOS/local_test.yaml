@@ -1,0 +1,11 @@
+_BASE_: "Base-NLOS.yaml"
+MODEL:
+  NLOS_CONVERTER:
+    NAME: "channel_preserving_nlos_converter"
+    NUM_CONVS: 1
+    INT_CONV_CHANNEL: 1
+    NORM: "none"
+  FCOS:
+    NORM: "none"
+DATALOADER:
+  NUM_WORKERS: 12
