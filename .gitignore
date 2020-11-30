@@ -57,3 +57,5 @@ demo/demo2.py
 train.sh
 benchmark.sh
 datasets/nlosGT
+datasets/VOC2012
+demo/input

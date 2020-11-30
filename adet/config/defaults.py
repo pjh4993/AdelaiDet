@@ -12,6 +12,49 @@ _C.INPUT.HFLIP_TRAIN = True
 _C.INPUT.CROP.CROP_INSTANCE = True
 
 # ---------------------------------------------------------------------------- #
+# WTN_SFT Head
+# ---------------------------------------------------------------------------- #
+_C.MODEL.WTN_SFT = CN()
+
+# This is the number of foreground classes.
+_C.MODEL.WTN_SFT.NUM_CLASSES = 80
+_C.MODEL.WTN_SFT.IN_FEATURES = ["p3", "p4", "p5", "p6", "p7"]
+_C.MODEL.WTN_SFT.FPN_STRIDES = [8, 16, 32, 64, 128]
+_C.MODEL.WTN_SFT.PRIOR_PROB = 0.01
+_C.MODEL.WTN_SFT.INFERENCE_TH_TRAIN = 0.05
+_C.MODEL.WTN_SFT.INFERENCE_TH_TEST = 0.05
+_C.MODEL.WTN_SFT.NMS_TH = 0.6
+_C.MODEL.WTN_SFT.PRE_NMS_TOPK_TRAIN = 1000
+_C.MODEL.WTN_SFT.PRE_NMS_TOPK_TEST = 1000
+_C.MODEL.WTN_SFT.POST_NMS_TOPK_TRAIN = 100
+_C.MODEL.WTN_SFT.POST_NMS_TOPK_TEST = 100
+_C.MODEL.WTN_SFT.TOP_LEVELS = 2
+_C.MODEL.WTN_SFT.NORM = "GN"  # Support GN or none
+_C.MODEL.WTN_SFT.USE_SCALE = True
+_C.MODEL.WTN_SFT.CTRNESS_ON_BBOX = True
+
+# Multiply centerness before threshold
+# This will affect the final performance by about 0.05 AP but save some time
+_C.MODEL.WTN_SFT.THRESH_WITH_CTR = False
+
+# Focal loss parameters
+_C.MODEL.WTN_SFT.LOSS_ALPHA = 0.25
+_C.MODEL.WTN_SFT.LOSS_GAMMA = 2.0
+_C.MODEL.WTN_SFT.SIZES_OF_INTEREST = [64, 128, 256, 512]
+_C.MODEL.WTN_SFT.USE_RELU = True
+_C.MODEL.WTN_SFT.USE_DEFORMABLE = False
+
+# the number of convolutions used in the cls and bbox tower
+_C.MODEL.WTN_SFT.NUM_CLS_CONVS = 4
+_C.MODEL.WTN_SFT.NUM_BOX_CONVS = 4
+_C.MODEL.WTN_SFT.NUM_SFT_CONVS = 2
+_C.MODEL.WTN_SFT.NUM_SHARE_CONVS = 0
+_C.MODEL.WTN_SFT.CENTER_SAMPLE = True
+_C.MODEL.WTN_SFT.POS_RADIUS = 1.5
+_C.MODEL.WTN_SFT.LOC_LOSS_TYPE = 'giou'
+
+
+# ---------------------------------------------------------------------------- #
 # FCOS Head
 # ---------------------------------------------------------------------------- #
 _C.MODEL.FCOS = CN()
