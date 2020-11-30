@@ -7,6 +7,7 @@ import torch
 from fvcore.common.file_io import PathManager
 from PIL import Image
 from pycocotools import mask as maskUtils
+import glob
 
 from detectron2.data import detection_utils as utils
 from detectron2.data import transforms as T
@@ -61,6 +62,14 @@ class NLOSDatasetMapper(DatasetMapper):
             "Rebuilding the augmentations. The previous augmentations will be overridden."
         )
         self.augmentation = build_augmentation(cfg, is_train)
+        self.initial_img_root = cfg.NLOS.INITIAL_IMG_ROOT
+        self.initial_imgs = None
+        self.use_initial_img = cfg.NLOS.USE_INITIAL_IMG
+        if cfg.NLOS.USE_INITIAL_IMG:
+            self.init_laser_imgs = [x for x in glob.glob(osp.join(self.initial_img_root, '*')) if x.find('Avg') != -1]
+            list.sort(self.init_laser_imgs)
+            self.init_laser_imgs = [T.StandardAugInput(utils.read_image(x, format=self.image_format)) for x in self.init_laser_imgs]
+            [aug_init.apply_augmentations(self.augmentations) for aug_init in self.init_laser_imgs]
 
         """
         if cfg.INPUT.CROP.ENABLED and is_train:
@@ -108,7 +117,10 @@ class NLOSDatasetMapper(DatasetMapper):
 
         laser_aug_input = [T.StandardAugInput(image) for image in laser_image]
         [aug_input.apply_augmentations(self.augmentations) for aug_input in laser_aug_input]
-        laser_image = [aug_input.image for aug_input in laser_aug_input]
+        if self.use_initial_img:
+            laser_aug_input = [aug_input.image - init.image for aug_input, init in zip(laser_aug_input, self.init_laser_imgs)]
+        else:
+            laser_image = [aug_input.image for aug_input in laser_aug_input]
 
         image_shape = laser_image[0].shape[:2]  # h, w
         # Pytorch's dataloader is efficient on torch.Tensor due to shared-memory,

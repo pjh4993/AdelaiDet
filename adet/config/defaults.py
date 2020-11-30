@@ -18,6 +18,9 @@ _C.INPUT.NLOS = False
 
 _C.NLOS = CN()
 _C.NLOS.LASER_GRID = 5
+_C.NLOS.USE_INITIAL_IMG = False
+_C.NLOS.INITIAL_IMG_ROOT = 'datasets/nlos/initialization'
+
 
 _C.MODEL.NLOS_CONVERTER = CN()
 _C.MODEL.NLOS_CONVERTER.NAME = "conv_fc_nlos_converter"
