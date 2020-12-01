@@ -6,4 +6,6 @@ MODEL:
     IN_FC_CHANNELS:  [16 , 4] #[4 * 16 * 256 2 * 8 * 256, 1 * 4 * 256]
     OUT_FC_CHANNELS: [[15,20],[8,10]]
     IN_FEATURES: ["p5", "p6"]
-
+DATASETS:
+  TRAIN: ("nlos_2020_train",)
+  TEST: ("nlos_2020_train",)
