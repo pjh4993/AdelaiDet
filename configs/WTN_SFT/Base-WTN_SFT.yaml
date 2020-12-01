@@ -1,5 +1,5 @@
 MODEL:
-  META_ARCHITECTURE: "OneStageDetector"
+  META_ARCHITECTURE: "MetaProposalNetwork"
   BACKBONE:
     NAME: "build_fcos_resnet_fpn_backbone"
   RESNETS:
@@ -13,9 +13,12 @@ DATASETS:
   TRAIN: ("voc_2012_val",)
   TEST: ("voc_2012_val",)
 SOLVER:
-  IMS_PER_BATCH: 16
+  IMS_PER_BATCH: 1
   BASE_LR: 0.01  # Note that RetinaNet uses a different default learning rate
   STEPS: (60000, 80000)
   MAX_ITER: 90000
 INPUT:
   MIN_SIZE_TRAIN: (640, 672, 704, 736, 768, 800)
+DATALOADER:
+  SAMPLER_TRAIN: "ClassWiseSampler"
+  ASPECT_RATIO_GROUPING: False

@@ -6,7 +6,10 @@ from detectron2.modeling import ProposalNetwork, GeneralizedRCNN
 from detectron2.utils.events import get_event_storage
 from detectron2.utils.logger import log_first_n
 from detectron2.modeling.postprocessing import detector_postprocess as d2_postprocesss
-
+from detectron2.modeling.backbone import build_backbone
+from detectron2.modeling.proposal_generator import build_proposal_generator
+from detectron2.structures import ImageList
+import torch
 
 def detector_postprocess(results, output_height, output_width, mask_threshold=0.5):
     """
@@ -48,6 +51,92 @@ class OneStageDetector(ProposalNetwork):
         processed_results = [{"one_stage_instances": r["proposals"]} for r in processed_results]
         return processed_results
 
+@META_ARCH_REGISTRY.register()
+class MetaProposalNetwork(ProposalNetwork):
+    """
+    A meta architecture that only predicts object proposals.
+    """
+
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        """
+        self.backbone = build_backbone(cfg)
+        self.proposal_generator = build_proposal_generator(cfg, self.backbone.output_shape())
+
+        self.register_buffer("pixel_mean", torch.Tensor(cfg.MODEL.PIXEL_MEAN).view(-1, 1, 1))
+        self.register_buffer("pixel_std", torch.Tensor(cfg.MODEL.PIXEL_STD).view(-1, 1, 1))
+        """
+        pass
+
+    def forward(self, batched_classwise_inputs):
+        #stage 1. extract class, box feature from images
+
+        #stage 2. find prototype for each class & box
+
+        #stage 3. calculate loss_cls, loss_reg from query based on prototype
+
+        """
+        batched_input :
+            support set : list of dict which contain image info, image tensor, annotation info
+            query set : list of dict of query
+            labels : current class label of interest
+        """
+        batched_inputs = [] 
+        batched_labels = []
+        for batch in batched_classwise_inputs:
+            batched_inputs.append(batch["support_set"] + batch["query_set"])
+            batched_labels.append(batch["labels"])
+
+        batched_features = []
+        batched_gt_instances = []
+        batched_images = []
+        for batched_input, batched_label in zip(batched_inputs, batched_labels):
+            images = [x["image"].to(self.device) for x in batched_input]
+            images = [(x - self.pixel_mean) / self.pixel_std for x in images]
+            images = ImageList.from_tensors(images, self.backbone.size_divisibility)
+            batched_images.append(images)
+            batched_features.append(self.backbone(images.tensor))
+
+            if "instances" in batched_input[0]:
+                gt_instances = [x["instances"].to(self.device) for x in batched_input]
+            elif "targets" in batched_input[0]:
+                log_first_n(
+                    logging.WARN, "'targets' in the model inputs is now renamed to 'instances'!", n=10
+                )
+                gt_instances = [x["targets"].to(self.device) for x in batched_input]
+            else:
+                gt_instances = None
+            
+            masked_instances = []
+            for instances in gt_instances:
+                instance_label = instances.get_fields()["gt_classes"]
+                mask_label = [x in batched_label for x in instance_label.cpu()]
+                masked_instances.append(instances[mask_label])
+
+            batched_gt_instances.append({
+                'instances':masked_instances,
+                'labels' : batched_label
+            })
+
+        batched_proposals, proposal_losses = self.proposal_generator(batched_images, batched_features, batched_gt_instances)
+        # In training, the proposals are not useful at all but we generate them anyway.
+        # This makes RPN-only models about 5% slower.
+        if self.training:
+            return proposal_losses
+
+        batched_processed_results = []
+        for proposals, inputs, images in zip(batched_proposals, batched_inputs, batched_images):
+            processed_results = []
+            for results_per_image, input_per_image, image_size in zip(
+                proposals, inputs, images.image_sizes
+            ):
+                height = input_per_image.get("height", image_size[0])
+                width = input_per_image.get("width", image_size[1])
+                r = detector_postprocess(results_per_image, height, width)
+                processed_results.append({"instances": r})
+            batched_processed_results.append(processed_results)
+
+        return batched_processed_results
 
 def build_top_module(cfg):
     top_type = cfg.MODEL.TOP_MODULE.NAME

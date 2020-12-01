@@ -1,8 +1,19 @@
-_BASE_: "Base-FCOS.yaml"
+_BASE_: "Base-WTN_SFT.yaml"
 MODEL:
   WEIGHTS: "detectron2://ImageNetPretrained/MSRA/R-50.pkl"
   RESNETS:
     DEPTH: 50
+  BACKBONE:
+    NAME: "build_fcos_vovnet_fpn_backbone"
+  RESNETS:
+    OUT_FEATURES: ["stage3", "stage4", "stage5"]
+  FPN:
+    IN_FEATURES: ["stage3", "stage4", "stage5"]
 INPUT:
-  MIN_SIZE_TRAIN: (800,)
+  MIN_SIZE_TRAIN: (160,)
 OUTPUT_DIR: "output/fcos/R_50_1x"
+DATASAMPLER:
+  CLASSWISE_SAMPLER:
+    N_WAY: 3
+    K_SHOT: 5
+    Q_QUERY: 3
