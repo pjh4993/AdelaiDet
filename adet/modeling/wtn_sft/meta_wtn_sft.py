@@ -178,6 +178,7 @@ class META_WTN_SFT_Head(nn.Module):
                         "share": (cfg.MODEL.WTN_SFT.NUM_SHARE_CONVS,
                                   False),
                         "sft": (cfg.MODEL.WTN_SFT.NUM_SFT_CONVS, False),
+                        "relation": (cfg.MODEL.WTN_SFT.NUM_SFT_CONVS, False),
                         }
         norm = None if cfg.MODEL.WTN_SFT.NORM == "none" else cfg.MODEL.WTN_SFT.NORM
         self.num_levels = len(input_shape)
@@ -232,7 +233,7 @@ class META_WTN_SFT_Head(nn.Module):
             self.scales = None
 
         for modules in [
-            self.cls_tower, self.bbox_tower, self.share_tower, self.sft_tower,
+            self.cls_tower, self.bbox_tower, self.share_tower, self.sft_tower, self.relation_tower,
             self.bbox_pred, self.ctrness,
         ]:
             for l in modules.modules():
@@ -273,7 +274,7 @@ class META_WTN_SFT_Head(nn.Module):
             dist_per_cls = []
             for k, v in cls_prototypes.items():
                 v = v.reshape(1, cls_tower.shape[1], 1, 1).expand_as(cls_tower)
-                dist_per_cls.append(torch.norm(cls_tower - v, dim=1).unsqueeze(1))
+                dist_per_cls.append(self.relation_tower(cls_tower + v))
 
             dist = cat(dist_per_cls, dim=1)
             print(dist.min(), dist.max())
