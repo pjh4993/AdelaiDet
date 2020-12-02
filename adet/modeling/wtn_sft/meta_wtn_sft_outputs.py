@@ -393,7 +393,6 @@ class META_WTN_SFTOutputs(nn.Module):
         loss_denorm = max(reduce_sum(ctrness_targets_sum).item() / num_gpus, 1e-6)
         instances.gt_ctrs = ctrness_targets
 
-        positive_identity_loss = None
 
         if pos_inds.numel() > 0:
             reg_loss = self.loc_loss_func(

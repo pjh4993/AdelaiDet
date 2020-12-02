@@ -59,7 +59,11 @@ class META_WTN_SFT(nn.Module):
     
     def forward(self, batched_images, batched_features, batched_gt_instances):
         results = []
-        losses = []
+        losses = {
+            "loss_wtn_sft_cls": [],
+            "loss_wtn_sft_loc": [],
+            "loss_wtn_sft_ctr": [],
+        }
 
         for images, features, gt_instances in zip(batched_images, batched_features, batched_gt_instances):
 
@@ -76,10 +80,14 @@ class META_WTN_SFT(nn.Module):
             pred_logits, pred_deltas, pred_ctrness = self.feature_extractor.forward_with_prototype(query_set, prototypes)
 
             if self.training:
-                loss = self.meta_wtn_sft_outputs.losses(pred_logits, pred_deltas, pred_ctrness, locations, query_set["gt_instances"], gt_instances["labels"])
-                losses.append(loss)
+                extra, loss = self.meta_wtn_sft_outputs.losses(pred_logits, pred_deltas, pred_ctrness, locations, query_set["gt_instances"], gt_instances["labels"])
+                for k, v in loss.items():
+                    losses[k].append(loss[k])
             else:
                 pass
+        
+        for k, v in losses.items():
+            losses[k] = torch.stack(v).mean()
         
         return results, losses
 
@@ -111,8 +119,8 @@ class META_WTN_SFT(nn.Module):
             attention = torch.matmul(k_cls_feature, k_box_feature.t())
             attention = F.normalize(attention.reshape(1,-1)).reshape(len(pos), len(pos))
 
-            class_prototypes[k] = torch.matmul(k_cls_feature.t(), attention).t().mean(dim=0)
-            bbox_prototypes[k] = torch.matmul(k_box_feature.t(), attention.t()).t().mean(dim=0)
+            class_prototypes[k] = F.normalize(torch.matmul(k_cls_feature.t(), attention).t().mean(dim=0).unsqueeze(0))
+            bbox_prototypes[k] = F.normalize(torch.matmul(k_box_feature.t(), attention.t()).t().mean(dim=0).unsqueeze(0))
 
         return class_prototypes, bbox_prototypes
 
@@ -168,6 +176,7 @@ class META_WTN_SFT_Head(nn.Module):
                                  cfg.MODEL.WTN_SFT.USE_DEFORMABLE),
                         "share": (cfg.MODEL.WTN_SFT.NUM_SHARE_CONVS,
                                   False),
+                        "sft": (cfg.MODEL.WTN_SFT.NUM_SFT_CONVS, False),
                         }
         norm = None if cfg.MODEL.WTN_SFT.NORM == "none" else cfg.MODEL.WTN_SFT.NORM
         self.num_levels = len(input_shape)
@@ -222,7 +231,7 @@ class META_WTN_SFT_Head(nn.Module):
             self.scales = None
 
         for modules in [
-            self.cls_tower, self.bbox_tower, self.share_tower, 
+            self.cls_tower, self.bbox_tower, self.share_tower, self.sft_tower, 
             self.bbox_pred, self.ctrness, 
         ]:
             for l in modules.modules():
@@ -251,40 +260,13 @@ class META_WTN_SFT_Head(nn.Module):
         
         return cls_features, bbox_features
 
-    def forward(self, x):
-        logits = []
-        bbox_reg = []
-        ctrness = []
-        for l, feature in enumerate(x):
-            feature = self.share_tower(feature)
-            cls_tower = self.cls_tower(feature)
-
-            bbox_tower = self.bbox_tower(feature)
-
-            sft_bbox_tower = self.sft_tower(cls_tower + bbox_tower) + bbox_tower
-
-            logits.append(self.cls_logits(cls_tower))
-
-            if self.ctrness_on_bbox:
-                ctrness.append(self.ctrness(sft_bbox_tower))
-            else:
-                ctrness.append(self.ctrness(cls_tower))
-
-            reg = self.bbox_pred(sft_bbox_tower)
-            if self.scales is not None:
-                reg = self.scales[l](reg)
-            # Note that we use relu, as in the improved WTN_SFT, instead of exp.
-            bbox_reg.append(F.relu(reg))
-        
-        return logits, bbox_reg, ctrness
-    
     def forward_with_prototype(self, query_set, prototypes):
 
         cls_features = query_set["cls_features"]
         box_features = query_set["bbox_features"]
 
         cls_prototypes = prototypes[0]
-        bbox_prototypes = prototypes[1]
+        #bbox_prototypes = prototypes[1]
 
         logits = []
         bbox_reg = []
@@ -297,21 +279,17 @@ class META_WTN_SFT_Head(nn.Module):
             
             dist = cat(dist_per_cls, dim=1)
 
-            logits.append(dist.exp() / dist.exp().sum(dim=1).unsqueeze(1))
+            logits.append(-dist)
+
+            sft_bbox_tower = self.sft_tower(cls_tower + bbox_tower) + bbox_tower
 
             if self.ctrness_on_bbox:
-                ctrness.append(self.ctrness(bbox_tower))
+                ctrness.append(self.ctrness(sft_bbox_tower))
             else:
                 ctrness.append(self.ctrness(cls_tower))
 
-            reg = []
-            for k, v in bbox_prototypes.items():
-                v = v.reshape(1, bbox_tower.shape[1], 1, 1).expand_as(bbox_tower)
-                k_reg = self.bbox_pred((bbox_tower + v) / 2)
-                reg.append(k_reg)
+            reg = self.bbox_pred(sft_bbox_tower)
             
-            reg = cat(reg, dim=1)
-
             if self.scales is not None:
                 reg = self.scales[l](reg)
 
