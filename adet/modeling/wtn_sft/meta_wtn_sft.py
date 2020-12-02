@@ -12,7 +12,7 @@ from adet.utils.comm import reduce_sum
 
 from adet.layers import DFConv2d, NaiveGroupNorm
 from adet.utils.comm import compute_locations
-from .meta_wtn_sft_outputs import META_WTN_SFTOutputs
+from .meta_wtn_sft_outputs import META_WTN_SFTOutputs, compute_ctrness_targets
 from detectron2.structures.image_list import ImageList
 
 __all__ = ["META_WTN_SFT"]
@@ -104,25 +104,19 @@ class META_WTN_SFT(nn.Module):
 
     def calculate_prototype(self, supp_set, locations, gt_labels):
         instances = self.meta_wtn_sft_outputs.get_prototype_target(locations, supp_set['gt_instances'], supp_set, gt_labels)
-
         labels = instances.labels.flatten()
         cls_features = instances.cls_features
-        box_features = instances.bbox_features
 
         pos_per_label = {k.item() : torch.nonzero(labels == k).squeeze(1) for k in gt_labels}
+        ctrness_targets = compute_ctrness_targets(instances.reg_targets)
         class_prototypes = {}
-        bbox_prototypes = {}
+
         for k, pos in pos_per_label.items():
             k_cls_feature = cls_features[pos]
-            k_box_feature = box_features[pos]
+            k_ctrness = F.normalize(ctrness_targets[pos].reshape(1,-1)).reshape(-1,1)
+            class_prototypes[k] = (k_cls_feature * k_ctrness).mean(dim=0)
 
-            attention = torch.matmul(k_cls_feature, k_box_feature.t())
-            attention = F.normalize(attention.reshape(1,-1)).reshape(len(pos), len(pos))
-
-            class_prototypes[k] = F.normalize(torch.matmul(k_cls_feature.t(), attention).t().mean(dim=0).unsqueeze(0))
-            bbox_prototypes[k] = F.normalize(torch.matmul(k_box_feature.t(), attention.t()).t().mean(dim=0).unsqueeze(0))
-
-        return class_prototypes, bbox_prototypes
+        return class_prototypes
 
     def split_by_sampler(self, images, cls_features, bbox_features, gt_instances):
         n_per = self.k_shot + self.q_query
@@ -260,12 +254,12 @@ class META_WTN_SFT_Head(nn.Module):
         
         return cls_features, bbox_features
 
-    def forward_with_prototype(self, query_set, prototypes):
+    def forward_with_prototype(self, query_set, cls_prototypes):
 
         cls_features = query_set["cls_features"]
         box_features = query_set["bbox_features"]
 
-        cls_prototypes = prototypes[0]
+        #cls_prototypes = prototypes
         #bbox_prototypes = prototypes[1]
 
         logits = []
