@@ -39,6 +39,7 @@ class ModuleListDial(nn.ModuleList):
         return result
 
 
+
 @PROPOSAL_GENERATOR_REGISTRY.register()
 class WTN_SFT(nn.Module):
     """
