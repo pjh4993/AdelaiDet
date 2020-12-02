@@ -178,7 +178,6 @@ class META_WTN_SFT_Head(nn.Module):
                         "share": (cfg.MODEL.WTN_SFT.NUM_SHARE_CONVS,
                                   False),
                         "sft": (cfg.MODEL.WTN_SFT.NUM_SFT_CONVS, False),
-                        "relation": (cfg.MODEL.WTN_SFT.NUM_SFT_CONVS, False),
                         }
         norm = None if cfg.MODEL.WTN_SFT.NORM == "none" else cfg.MODEL.WTN_SFT.NORM
         self.num_levels = len(input_shape)
@@ -223,6 +222,10 @@ class META_WTN_SFT_Head(nn.Module):
             stride=1, padding=1
         )
         self.ctrness = nn.Conv2d(
+            in_channels, 1, kernel_size=3,
+            stride=1, padding=1
+        )
+        self.relation_tower = nn.Conv2d(
             in_channels, 1, kernel_size=3,
             stride=1, padding=1
         )
@@ -277,7 +280,6 @@ class META_WTN_SFT_Head(nn.Module):
                 dist_per_cls.append(self.relation_tower(cls_tower + v))
 
             dist = cat(dist_per_cls, dim=1)
-            print(dist.min(), dist.max())
             assert dist.isnan().sum() == 0
 
             logits.append(-dist)
