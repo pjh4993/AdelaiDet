@@ -4,5 +4,8 @@ MODEL:
   RESNETS:
     DEPTH: 50
 INPUT:
-  MIN_SIZE_TRAIN: (800,)
+  MIN_SIZE_TRAIN: (640, 720, 800)
+DATASETS:
+  TRAIN: ("syntheticSKU_train",)
+  TEST: ("syntheticSKU_valid",)
 OUTPUT_DIR: "output/fcos/R_50_1x"

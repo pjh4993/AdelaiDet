@@ -10,6 +10,9 @@ from detectron2.modeling.backbone import build_backbone
 from detectron2.modeling.proposal_generator import build_proposal_generator
 from detectron2.structures import ImageList
 import torch
+import torch
+import gc
+
 
 def detector_postprocess(results, output_height, output_width, mask_threshold=0.5):
     """
@@ -136,6 +139,13 @@ class MetaProposalNetwork(ProposalNetwork):
                 r = detector_postprocess(results_per_image, height, width)
                 processed_results.append({"instances": r})
             batched_processed_results.append(processed_results)
+
+        for obj in gc.get_objects():
+            try:
+                if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
+                    print(type(obj), obj.size())
+            except:
+                pass
 
         return batched_processed_results
 

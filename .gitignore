@@ -59,3 +59,4 @@ benchmark.sh
 datasets/nlosGT
 datasets/VOC2012
 demo/input
+datasets/syntheticSKU

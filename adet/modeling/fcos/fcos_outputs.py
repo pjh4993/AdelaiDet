@@ -271,7 +271,7 @@ class FCOSOutputs(nn.Module):
             "target_inds": target_inds,
         }
 
-    def losses(self, logits_pred, reg_pred, ctrness_pred, id_vec_pred, locations, gt_instances, top_feats=None,):
+    def losses(self, logits_pred, reg_pred, ctrness_pred, locations, gt_instances, top_feats=None,):
         """
         Return the losses from a set of FCOS predictions and their associated ground-truth.
 
@@ -320,10 +320,6 @@ class FCOSOutputs(nn.Module):
             # Reshape: (N, 1, Hi, Wi) -> (N*Hi*Wi,)
             x.permute(0, 2, 3, 1).reshape(-1) for x in ctrness_pred
         ], dim=0,)
-        instances.identity_pred = cat([
-            # Reshape: (N, 1, Hi, Wi) -> (N*Hi*Wi,)
-            x.permute(0, 2, 3, 1).reshape(-1, self.id_dim) for x in id_vec_pred
-        ], dim=0,)
 
         if len(top_feats) > 0:
             instances.top_feats = cat([
@@ -338,20 +334,15 @@ class FCOSOutputs(nn.Module):
         assert num_classes == self.num_classes
 
         labels = instances.labels.flatten()
-        gt_object = instances.gt_inds
 
         pos_inds = torch.nonzero(labels != num_classes).squeeze(1)
-        neg_inds = torch.nonzero(labels == num_classes).squeeze(1)
         num_pos_local = pos_inds.numel()
-        num_neg_local = neg_inds.numel()
 
         num_gpus = get_world_size()
 
         total_num_pos = reduce_sum(pos_inds.new_tensor([num_pos_local])).item()
-        total_num_neg = reduce_sum(neg_inds.new_tensor([num_neg_local])).item()
 
         num_pos_avg = max(total_num_pos / num_gpus, 1.0)
-        num_neg_avg = max(total_num_neg / num_gpus, 1.0)
 
         # prepare one_hot
         class_target = torch.zeros_like(instances.logits_pred)
@@ -365,23 +356,6 @@ class FCOSOutputs(nn.Module):
             reduction="sum",
         ) / num_pos_avg
 
-        #neg_instances = instances[neg_inds]
-
-        neg_id = instances[neg_inds].identity_pred
-        negative_identity_mean_loss = sigmoid_focal_loss_jit(
-            neg_id,
-            torch.zeros_like(neg_id),
-            alpha=self.focal_loss_alpha,
-            gamma=self.focal_loss_gamma,
-            reduction="sum",
-        ) / num_neg_avg
-
-        """
-        negative_identity_std_loss = nn.SmoothL1Loss(reduction="mean")(
-            neg_instances.identity_pred.std(),
-            0.1 * torch.ones_like(neg_instances.identity_pred.std()),
-        )
-        """
 
         instances = instances[pos_inds]
         instances.pos_inds = pos_inds
@@ -407,16 +381,6 @@ class FCOSOutputs(nn.Module):
                 ctrness_targets
             ) / num_pos_avg
 
-            """
-            positive_identity_loss = self.identity_loss_func(
-                instances.identity_pred,
-                instances.gt_inds,
-            ) / (num_pos_avg**2)
-            """
-            positive_identity_loss = self.identity_loss_func(
-                instances.identity_pred,
-                instances.gt_inds,
-            )
         else:
             reg_loss = instances.reg_pred.sum() * 0
             ctrness_loss = instances.ctrness_pred.sum() * 0
@@ -427,7 +391,6 @@ class FCOSOutputs(nn.Module):
             "loss_fcos_ctr": ctrness_loss,
             #"loss_negative_identity_mean": negative_identity_mean_loss,
             #"loss_negative_identity_std": negative_identity_std_loss,
-            "loss_positive_identity": positive_identity_loss,
         }
         extras = {
             "instances": instances,

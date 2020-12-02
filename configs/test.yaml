@@ -1,0 +1,3 @@
+DATASETS:
+  TRAIN: ("syntheticSKU_train",)
+  TEST: ("syntheticSKU_valid",)
