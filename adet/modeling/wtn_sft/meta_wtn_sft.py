@@ -112,9 +112,12 @@ class META_WTN_SFT(nn.Module):
         class_prototypes = {}
 
         for k, pos in pos_per_label.items():
+            assert len(pos) != 0
             k_cls_feature = cls_features[pos]
-            k_ctrness = F.normalize(ctrness_targets[pos].reshape(1,-1)).reshape(-1,1)
-            class_prototypes[k] = (k_cls_feature * k_ctrness).mean(dim=0)
+            k_ctrness = ctrness_targets[pos].reshape(-1,1)
+            k_ctrness[k_ctrness.isnan()] = 0
+            k_ctrness /= k_ctrness.sum()
+            class_prototypes[k] = (k_cls_feature * k_ctrness).sum(dim=0)
 
         return class_prototypes
 
