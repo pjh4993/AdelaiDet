@@ -117,7 +117,11 @@ class META_WTN_SFT(nn.Module):
             k_ctrness = ctrness_targets[pos].reshape(-1,1)
             k_ctrness[k_ctrness.isnan()] = 0
             k_ctrness = nn.Softmax(dim=0)(k_ctrness)
-            class_prototypes[k] = (k_cls_feature * k_ctrness).sum(dim=0)
+            prototype = (k_cls_feature * k_ctrness).sum(dim=0)
+
+            assert prototype.isnan().sum() == 0
+
+            class_prototypes[k] = prototype
 
         return class_prototypes
 
@@ -272,6 +276,8 @@ class META_WTN_SFT_Head(nn.Module):
                 dist_per_cls.append(torch.norm(cls_tower - v, dim=1).unsqueeze(1))
 
             dist = cat(dist_per_cls, dim=1)
+            print(dist.min(), dist.max())
+            assert dist.isnan().sum() == 0
 
             logits.append(-dist)
 
@@ -287,7 +293,9 @@ class META_WTN_SFT_Head(nn.Module):
             if self.scales is not None:
                 reg = self.scales[l](reg)
 
+            assert reg.isnan().sum() == 0
             # Note that we use relu, as in the improved WTN_SFT, instead of exp.
             bbox_reg.append(F.relu(reg))
+
 
         return logits, bbox_reg, ctrness
