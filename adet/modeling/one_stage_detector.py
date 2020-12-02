@@ -13,7 +13,7 @@ import torch
 
 def detector_postprocess(results, output_height, output_width, mask_threshold=0.5):
     """
-    In addition to the post processing of detectron2, we add scalign for 
+    In addition to the post processing of detectron2, we add scalign for
     bezier control points.
     """
     scale_x, scale_y = (output_width / results.image_size[1], output_height / results.image_size[0])
@@ -81,7 +81,7 @@ class MetaProposalNetwork(ProposalNetwork):
             query set : list of dict of query
             labels : current class label of interest
         """
-        batched_inputs = [] 
+        batched_inputs = []
         batched_labels = []
         for batch in batched_classwise_inputs:
             batched_inputs.append(batch["support_set"] + batch["query_set"])
@@ -106,11 +106,12 @@ class MetaProposalNetwork(ProposalNetwork):
                 gt_instances = [x["targets"].to(self.device) for x in batched_input]
             else:
                 gt_instances = None
-            
+
             masked_instances = []
             for instances in gt_instances:
                 instance_label = instances.get_fields()["gt_classes"]
-                mask_label = [x in batched_label for x in instance_label.cpu()]
+                batched_label = batched_label.to(instance_label.device)
+                mask_label = [x in batched_label for x in instance_label]
                 masked_instances.append(instances[mask_label])
 
             batched_gt_instances.append({
@@ -202,7 +203,7 @@ class OneStageRCNN(GeneralizedRCNN):
         features = self.backbone(images.tensor)
 
         if self.proposal_generator:
-            proposals, proposal_losses = self.proposal_generator( 
+            proposals, proposal_losses = self.proposal_generator(
                 images, features, gt_instances, self.top_module)
         else:
             assert "proposals" in batched_inputs[0]
