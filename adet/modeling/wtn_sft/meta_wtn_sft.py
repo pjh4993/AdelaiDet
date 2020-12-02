@@ -262,9 +262,6 @@ class META_WTN_SFT_Head(nn.Module):
         cls_features = query_set["cls_features"]
         box_features = query_set["bbox_features"]
 
-        #cls_prototypes = prototypes
-        #bbox_prototypes = prototypes[1]
-
         logits = []
         bbox_reg = []
         ctrness = []
