@@ -56,7 +56,7 @@ class META_WTN_SFT(nn.Module):
         self.n_way = cfg.DATASAMPLER.CLASSWISE_SAMPLER.N_WAY
         self.k_shot = cfg.DATASAMPLER.CLASSWISE_SAMPLER.K_SHOT
         self.q_query = cfg.DATASAMPLER.CLASSWISE_SAMPLER.Q_QUERY
-    
+
     def forward(self, batched_images, batched_features, batched_gt_instances):
         results = []
         losses = {
@@ -85,10 +85,10 @@ class META_WTN_SFT(nn.Module):
                     losses[k].append(loss[k])
             else:
                 pass
-        
+
         for k, v in losses.items():
             losses[k] = torch.stack(v).mean()
-        
+
         return results, losses
 
     def compute_locations(self, features):
@@ -113,8 +113,10 @@ class META_WTN_SFT(nn.Module):
 
         for k, pos in pos_per_label.items():
             k_cls_feature = cls_features[pos]
-            k_ctrness = F.normalize(ctrness_targets[pos].reshape(1,-1)).reshape(-1,1)
-            class_prototypes[k] = (k_cls_feature * k_ctrness).mean(dim=0)
+            k_ctrness = ctrness_targets[pos].reshape(-1, 1)
+            k_ctrness[k_ctrness.isnan()] = 0
+            k_ctrness /= k_ctrness.sum()
+            class_prototypes[k] = (k_cls_feature * k_ctrness).sum(dim=0)
 
         return class_prototypes
 
@@ -135,7 +137,7 @@ class META_WTN_SFT(nn.Module):
 
         supp_set_idx = []
         query_set_idx = []
-        
+
         for _id in range(self.n_way):
             id_list = np.arange(_id * n_per, (_id +1) * n_per)
             supp_set_idx.extend(id_list[:self.k_shot])
@@ -225,8 +227,8 @@ class META_WTN_SFT_Head(nn.Module):
             self.scales = None
 
         for modules in [
-            self.cls_tower, self.bbox_tower, self.share_tower, self.sft_tower, 
-            self.bbox_pred, self.ctrness, 
+            self.cls_tower, self.bbox_tower, self.share_tower, self.sft_tower,
+            self.bbox_pred, self.ctrness,
         ]:
             for l in modules.modules():
                 if isinstance(l, nn.Conv2d):
@@ -238,7 +240,7 @@ class META_WTN_SFT_Head(nn.Module):
         bias_value = -math.log((1 - prior_prob) / prior_prob)
         # initialize the bias for centerness
         torch.nn.init.constant_(self.ctrness.bias, bias_value)
-    
+
     def forward_feature(self, x):
         cls_features = []
         bbox_features = []
@@ -251,7 +253,7 @@ class META_WTN_SFT_Head(nn.Module):
 
             cls_features.append(cls_tower)
             bbox_features.append(bbox_tower)
-        
+
         return cls_features, bbox_features
 
     def forward_with_prototype(self, query_set, cls_prototypes):
@@ -270,7 +272,7 @@ class META_WTN_SFT_Head(nn.Module):
             for k, v in cls_prototypes.items():
                 v = v.reshape(1, cls_tower.shape[1], 1, 1).expand_as(cls_tower)
                 dist_per_cls.append(torch.norm(cls_tower - v, dim=1).unsqueeze(1))
-            
+
             dist = cat(dist_per_cls, dim=1)
 
             logits.append(-dist)
@@ -283,11 +285,11 @@ class META_WTN_SFT_Head(nn.Module):
                 ctrness.append(self.ctrness(cls_tower))
 
             reg = self.bbox_pred(sft_bbox_tower)
-            
+
             if self.scales is not None:
                 reg = self.scales[l](reg)
 
             # Note that we use relu, as in the improved WTN_SFT, instead of exp.
             bbox_reg.append(F.relu(reg))
-           
+
         return logits, bbox_reg, ctrness

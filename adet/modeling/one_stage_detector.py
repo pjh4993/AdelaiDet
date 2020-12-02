@@ -110,7 +110,7 @@ class MetaProposalNetwork(ProposalNetwork):
             masked_instances = []
             for instances in gt_instances:
                 instance_label = instances.get_fields()["gt_classes"]
-                batched_label = batched_label.to(instance_label.device)
+                instance_label = instance_label.to(batched_label.device)
                 mask_label = [x in batched_label for x in instance_label]
                 masked_instances.append(instances[mask_label])
 
