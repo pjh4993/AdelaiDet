@@ -248,6 +248,7 @@ class META_WTN_SFT_Head(nn.Module):
         prior_prob = cfg.MODEL.WTN_SFT.PRIOR_PROB
         bias_value = -math.log((1 - prior_prob) / prior_prob)
         # initialize the bias for centerness
+        torch.nn.init.constant_(self.relation_tower.bias, bias_value)
         torch.nn.init.constant_(self.ctrness.bias, bias_value)
 
     def forward_feature(self, x):
@@ -282,7 +283,7 @@ class META_WTN_SFT_Head(nn.Module):
             dist = cat(dist_per_cls, dim=1)
             assert dist.isnan().sum() == 0
 
-            logits.append(-dist)
+            logits.append(dist)
 
             sft_bbox_tower = self.sft_tower(cls_tower + bbox_tower) + bbox_tower
 
