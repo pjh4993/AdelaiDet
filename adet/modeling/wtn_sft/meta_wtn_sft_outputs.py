@@ -250,7 +250,7 @@ class META_WTN_SFTOutputs(nn.Module):
             reg_targets_per_im = reg_targets_per_im[range(len(locations)), locations_to_gt_inds]
 
             labels_per_im = labels_per_im[locations_to_gt_inds]
-            labels_per_im[locations_to_min_area == INF] = num_classes
+            labels_per_im[locations_to_min_area == INF] = -1
 
             labels.append(labels_per_im)
             reg_targets.append(reg_targets_per_im)
@@ -360,7 +360,7 @@ class META_WTN_SFTOutputs(nn.Module):
 
         labels = instances.labels.flatten()
 
-        pos_inds = torch.nonzero(labels != num_classes).squeeze(1)
+        pos_inds = torch.nonzero(labels != -1).squeeze(1)
         num_pos_local = pos_inds.numel()
 
         num_gpus = get_world_size()
@@ -382,6 +382,8 @@ class META_WTN_SFTOutputs(nn.Module):
             gamma=self.focal_loss_gamma,
             reduction="sum",
         ) / num_pos_avg
+
+        assert class_loss.isnan().sum() == 0
 
         instances = instances[pos_inds]
         instances.pos_inds = pos_inds
