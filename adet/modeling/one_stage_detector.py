@@ -71,6 +71,56 @@ class MetaProposalNetwork(ProposalNetwork):
         """
         pass
 
+    def image_to_tensor(self, batched_image):
+        images = [x["image"].to(self.device) for x in batched_image]
+        images = [(x - self.pixel_mean) / self.pixel_std for x in images]
+        images = ImageList.from_tensors(images, self.backbone.size_divisibility)
+        return images
+    
+    def extract_instance(self, batched_input, batched_label):
+        if "instances" in batched_input[0]:
+            gt_instances = [x["instances"].to(self.device) for x in batched_input]
+        elif "targets" in batched_input[0]:
+            log_first_n(
+                logging.WARN, "'targets' in the model inputs is now renamed to 'instances'!", n=10
+            )
+            gt_instances = [x["targets"].to(self.device) for x in batched_input]
+        else:
+            gt_instances = None
+
+        masked_instances = []
+        for instances in gt_instances:
+            instance_label = instances.get_fields()["gt_classes"]
+            instance_label = instance_label.to(batched_label.device)
+            mask_label = [x in batched_label for x in instance_label]
+            masked_instances.append(instances[mask_label])
+        
+        return masked_instances
+
+
+    def split_by_set(self, batched_inputs, batched_labels):
+
+        batched_images = []
+        batched_features = []
+        batched_gt_instances = []
+
+        for batched_input, batched_label in zip(batched_inputs, batched_labels):
+            sup_images = self.image_to_tensor(batched_input[0])
+            que_images = self.image_to_tensor(batched_input[1])
+
+            batched_images.append([sup_images, que_images])
+            batched_features.append([self.backbone(sup_images.tensor), self.backbone(que_images.tensor)])
+
+            sup_masked_instances = self.extract_instance(batched_input[0], batched_label)
+            que_masked_instances = self.extract_instance(batched_input[1], batched_label)
+
+            batched_gt_instances.append({
+                'instances':[sup_masked_instances, que_masked_instances],
+                'labels' : batched_label
+            })
+        
+        return batched_images, batched_features, batched_gt_instances
+
     def forward(self, batched_classwise_inputs):
         #stage 1. extract class, box feature from images
 
@@ -84,47 +134,17 @@ class MetaProposalNetwork(ProposalNetwork):
             query set : list of dict of query
             labels : current class label of interest
         """
+
         batched_inputs = []
         batched_labels = []
         for batch in batched_classwise_inputs:
-            batched_inputs.append(batch["support_set"] + batch["query_set"])
+            batched_inputs.append([batch["support_set"], batch["query_set"]])
             batched_labels.append(batch["labels"])
 
-        batched_features = []
-        batched_gt_instances = []
-        batched_images = []
-        for batched_input, batched_label in zip(batched_inputs, batched_labels):
-            images = [x["image"].to(self.device) for x in batched_input]
-            images = [(x - self.pixel_mean) / self.pixel_std for x in images]
-            images = ImageList.from_tensors(images, self.backbone.size_divisibility)
-            batched_images.append(images)
-            batched_features.append(self.backbone(images.tensor))
-
-            if "instances" in batched_input[0]:
-                gt_instances = [x["instances"].to(self.device) for x in batched_input]
-            elif "targets" in batched_input[0]:
-                log_first_n(
-                    logging.WARN, "'targets' in the model inputs is now renamed to 'instances'!", n=10
-                )
-                gt_instances = [x["targets"].to(self.device) for x in batched_input]
-            else:
-                gt_instances = None
-
-            masked_instances = []
-            for instances in gt_instances:
-                instance_label = instances.get_fields()["gt_classes"]
-                instance_label = instance_label.to(batched_label.device)
-                mask_label = [x in batched_label for x in instance_label]
-                masked_instances.append(instances[mask_label])
-
-            batched_gt_instances.append({
-                'instances':masked_instances,
-                'labels' : batched_label
-            })
+        batched_images, batched_features, batched_gt_instances = self.split_by_set(batched_inputs, batched_labels)
 
         batched_proposals, proposal_losses = self.proposal_generator(batched_images, batched_features, batched_gt_instances)
-        # In training, the proposals are not useful at all but we generate them anyway.
-        # This makes RPN-only models about 5% slower.
+
         if self.training:
             return proposal_losses
 

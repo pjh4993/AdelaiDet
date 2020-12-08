@@ -13,6 +13,11 @@ def reduce_sum(tensor):
     dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
     return tensor
 
+def same_storage(x,y):
+    x_ptrs = set(e.data_ptr() for e in x.view(-1))
+    y_ptrs = set(e.data_ptr() for e in y.view(-1))
+
+    return x_ptrs.issubset(y_ptrs) or y_ptrs.issubset(x_ptrs) 
 
 def aligned_bilinear(tensor, factor):
     assert tensor.dim() == 4

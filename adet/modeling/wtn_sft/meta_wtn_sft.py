@@ -11,7 +11,7 @@ from detectron2.utils.comm import get_world_size
 from adet.utils.comm import reduce_sum
 
 from adet.layers import DFConv2d, NaiveGroupNorm
-from adet.utils.comm import compute_locations
+from adet.utils.comm import compute_locations, same_storage
 from .meta_wtn_sft_outputs import META_WTN_SFTOutputs, compute_ctrness_targets
 from detectron2.structures.image_list import ImageList
 
@@ -65,22 +65,39 @@ class META_WTN_SFT(nn.Module):
             "loss_wtn_sft_ctr": [],
         }
 
-        for images, features, gt_instances in zip(batched_images, batched_features, batched_gt_instances):
+        for [sup_images, que_images], [sup_features, que_features], gt_instances in zip(batched_images, batched_features, batched_gt_instances):
+            
+            sup_features = [sup_features[f] for f in self.in_features]
+            que_features = [que_features[f] for f in self.in_features]
 
-            features = [features[f] for f in self.in_features]
+            sup_locations = self.compute_locations(sup_features)
+            que_locations = self.compute_locations(que_features)
 
-            locations = self.compute_locations(features)
+            sup_cls_features, sup_bbox_features = self.feature_extractor.forward_feature(sup_features)
+            que_cls_features, que_bbox_features = self.feature_extractor.forward_feature(que_features)
 
-            cls_features, bbox_features = self.feature_extractor.forward_feature(features)
+            [sup_gt_instances, que_gt_instances] = gt_instances['instances']
+            gt_labels = gt_instances['labels']
 
-            supp_set, query_set = self.split_by_sampler(images, cls_features, bbox_features, gt_instances)
+            supp_set = {
+                "cls_features": sup_cls_features,
+                "bbox_features": sup_bbox_features,
+                "images" : sup_images,
+                "gt_instances": sup_gt_instances,
+            }
+            query_set = {
+                "cls_features": que_cls_features,
+                "bbox_features": que_bbox_features,
+                "images" : que_images,
+                "gt_instances": que_gt_instances,
+            }
 
-            prototypes = self.calculate_prototype(supp_set, locations, gt_instances['labels'])
+            prototypes = self.calculate_prototype(supp_set, sup_locations, gt_labels)
 
             pred_logits, pred_deltas, pred_ctrness = self.feature_extractor.forward_with_prototype(query_set, prototypes)
 
             if self.training:
-                extra, loss = self.meta_wtn_sft_outputs.losses(pred_logits, pred_deltas, pred_ctrness, locations, query_set["gt_instances"], gt_instances["labels"])
+                extra, loss = self.meta_wtn_sft_outputs.losses(pred_logits, pred_deltas, pred_ctrness, que_locations, query_set["gt_instances"], gt_labels)
                 for k, v in loss.items():
                     losses[k].append(loss[k])
             else:
@@ -150,13 +167,15 @@ class META_WTN_SFT(nn.Module):
 
         supp_set['cls_features'] = [x[supp_set_idx] for x in cls_features]
         supp_set['bbox_features'] = [x[supp_set_idx] for x in bbox_features]
-        supp_set['images'] = images[supp_set_idx]
+        supp_set['images'] = supp_set_idx
         supp_set['gt_instances'] = [gt_instances["instances"][x] for x in supp_set_idx]
 
         query_set['cls_features'] = [x[query_set_idx] for x in cls_features]
         query_set['bbox_features'] = [x[query_set_idx] for x in bbox_features]
-        query_set['images'] = images[query_set_idx]
+        query_set['images'] = query_set_idx
         query_set['gt_instances'] = [gt_instances["instances"][x] for x in query_set_idx]
+
+        same_storage(cls_features[0], supp_set['cls_features'][0])
 
         return supp_set, query_set
 
@@ -280,15 +299,13 @@ class META_WTN_SFT_Head(nn.Module):
                 v = v.reshape(1, cls_tower.shape[1], 1, 1).expand_as(cls_tower)
                 dist_per_cls.append(self.relation_tower(cls_tower + v))
             
-            print(cls_tower.mean())
-            print(bbox_tower.mean())
 
             dist = cat(dist_per_cls, dim=1)
             assert dist.isnan().sum() == 0
 
             logits.append(dist)
 
-            sft_bbox_tower = self.sft_tower(cls_tower + bbox_tower) + bbox_tower
+            sft_bbox_tower = bbox_tower #self.sft_tower(cls_tower + bbox_tower) + bbox_tower
 
             if self.ctrness_on_bbox:
                 ctrness.append(self.ctrness(sft_bbox_tower))
