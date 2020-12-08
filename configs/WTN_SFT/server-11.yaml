@@ -1,12 +1,12 @@
 _BASE_: "Base-WTN_SFT.yaml"
 MODEL:
-  BACKBONE:
-    NAME: "build_fcos_vovnet_fpn_backbone"
-    FREEZE_AT: 0
-  VOVNET:
-    OUT_FEATURES: ["stage3","stage4", "stage5"]
-  FPN:
-    IN_FEATURES: ["stage3","stage4", "stage5"]
+# BACKBONE:
+#NAME: "build_fcos_vovnet_fpn_backbone"
+#FREEZE_AT: 0
+#VOVNET:
+#OUT_FEATURES: ["stage3","stage4", "stage5"]
+#FPN:
+#IN_FEATURES: ["stage3","stage4", "stage5"]
   PROPOSAL_GENERATOR:
     NAME: "META_WTN_SFT"
   WTN_SFT:
@@ -23,6 +23,6 @@ DATASAMPLER:
 SOLVER:
   IMS_PER_BATCH: 2
 INPUT:
-  MIN_SIZE_TRAIN: (320,)
+  MIN_SIZE_TRAIN: (480,)
 DATALOADER:
   NUM_WORKERS: 24
