@@ -142,6 +142,7 @@ class META_WTN_SFT(nn.Module):
             assert prototype.isnan().sum() == 0
 
             class_prototypes[k] = prototype
+            print(prototype.mean())
 
         return class_prototypes
 
@@ -300,7 +301,7 @@ class META_WTN_SFT_Head(nn.Module):
             dist_per_cls = []
             for k, v in cls_prototypes.items():
                 v = v.reshape(1, cls_tower.shape[1], 1, 1).expand_as(cls_tower)
-                dist_per_cls.append(self.relation_tower(cls_tower * v))
+                dist_per_cls.append(self.relation_tower(cls_tower - v))
             
 
             dist = cat(dist_per_cls, dim=1)
