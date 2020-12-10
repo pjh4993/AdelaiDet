@@ -58,7 +58,7 @@ class META_WTN_SFT(nn.Module):
         self.q_query = cfg.DATASAMPLER.CLASSWISE_SAMPLER.Q_QUERY
 
     def forward(self, batched_images, batched_features, batched_gt_instances):
-        results = []
+        batched_results = []
         losses = {
             "loss_wtn_sft_cls": [],
             "loss_wtn_sft_loc": [],
@@ -101,12 +101,13 @@ class META_WTN_SFT(nn.Module):
                 for k, v in loss.items():
                     losses[k].append(loss[k])
             else:
-                pass
+                results = self.meta_wtn_sft_outputs.predict_proposals(pred_logits, pred_deltas, pred_ctrness, que_locations, que_images.image_sizes)
+                batched_results.append(results)
 
         for k, v in losses.items():
             losses[k] = torch.stack(v).mean()
 
-        return results, losses
+        return batched_results, losses
 
     def compute_locations(self, features):
         locations = []
@@ -131,10 +132,12 @@ class META_WTN_SFT(nn.Module):
         for k, pos in pos_per_label.items():
             assert len(pos) != 0
             k_cls_feature = cls_features[pos]
+            """
             k_ctrness = ctrness_targets[pos].reshape(-1,1)
             k_ctrness[k_ctrness.isnan()] = 0
             k_ctrness = nn.Softmax(dim=0)(k_ctrness)
-            prototype = (k_cls_feature * k_ctrness).sum(dim=0)
+            """
+            prototype = (k_cls_feature).mean(dim=0)
 
             assert prototype.isnan().sum() == 0
 
@@ -297,7 +300,7 @@ class META_WTN_SFT_Head(nn.Module):
             dist_per_cls = []
             for k, v in cls_prototypes.items():
                 v = v.reshape(1, cls_tower.shape[1], 1, 1).expand_as(cls_tower)
-                dist_per_cls.append(self.relation_tower(cls_tower + v))
+                dist_per_cls.append(self.relation_tower(cls_tower * v))
             
 
             dist = cat(dist_per_cls, dim=1)

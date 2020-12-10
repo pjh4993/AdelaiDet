@@ -351,7 +351,7 @@ class META_WTN_SFTOutputs(nn.Module):
         ], dim=0,)
 
         return self.wtn_sft_losses(instances, gt_labels)
-
+ 
 
     def wtn_sft_losses(self, instances, gt_labels):
         num_classes = instances.logits_pred.size(1)
@@ -457,7 +457,7 @@ class META_WTN_SFTOutputs(nn.Module):
 
             sampled_boxes.append(
                 self.forward_for_single_feature_map(
-                    l, o, r, c, image_sizes, t
+                    l, o, r, c, image_sizes
                 )
             )
 

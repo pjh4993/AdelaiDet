@@ -32,6 +32,7 @@ from detectron2.evaluation import (
     LVISEvaluator,
     PascalVOCDetectionEvaluator,
     SemSegEvaluator,
+    METACOCOEvaluator,
     verify_results,
 )
 from detectron2.modeling import GeneralizedRCNNWithTTA
@@ -139,6 +140,7 @@ class Trainer(DefaultTrainer):
             output_folder = os.path.join(cfg.OUTPUT_DIR, "inference")
         evaluator_list = []
         evaluator_type = MetadataCatalog.get(dataset_name).evaluator_type
+        class_wise_grouping = cfg.DATALOADER.SAMPLER_TRAIN=='ClassWiseSampler'
         if evaluator_type in ["sem_seg", "coco_panoptic_seg"]:
             evaluator_list.append(
                 SemSegEvaluator(
@@ -150,7 +152,10 @@ class Trainer(DefaultTrainer):
                 )
             )
         if evaluator_type in ["coco", "coco_panoptic_seg"]:
-            evaluator_list.append(COCOEvaluator(dataset_name, cfg, True, output_folder))
+            if class_wise_grouping:
+                evaluator_list.append(METACOCOEvaluator(dataset_name, cfg, True, output_folder))
+            else:
+                evaluator_list.append(COCOEvaluator(dataset_name, cfg, True, output_folder))
         if evaluator_type == "coco_panoptic_seg":
             evaluator_list.append(COCOPanopticEvaluator(dataset_name, output_folder))
         if evaluator_type == "pascal_voc":

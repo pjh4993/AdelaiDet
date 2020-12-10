@@ -149,25 +149,22 @@ class MetaProposalNetwork(ProposalNetwork):
             return proposal_losses
 
         batched_processed_results = []
-        for proposals, inputs, images in zip(batched_proposals, batched_inputs, batched_images):
+        query_inputs = [x[1] for x in batched_inputs]
+        query_images = [x[1] for x in batched_images]
+        for proposals, inputs, images in zip(batched_proposals, query_inputs, query_images):
             processed_results = []
             for results_per_image, input_per_image, image_size in zip(
                 proposals, inputs, images.image_sizes
             ):
-                height = input_per_image.get("height", image_size[0])
-                width = input_per_image.get("width", image_size[1])
+                #height = input_per_image.get("height", image_size[0])
+                #width = input_per_image.get("width", image_size[1])
+                height = image_size[0]
+                width = image_size[1]
                 r = detector_postprocess(results_per_image, height, width)
                 processed_results.append({"instances": r})
             batched_processed_results.append(processed_results)
 
-        for obj in gc.get_objects():
-            try:
-                if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
-                    print(type(obj), obj.size())
-            except:
-                pass
-
-        return batched_processed_results
+        return batched_processed_results, batched_gt_instances
 
 def build_top_module(cfg):
     top_type = cfg.MODEL.TOP_MODULE.NAME
