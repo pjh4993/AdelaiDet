@@ -1,16 +1,15 @@
 _BASE_: "Base-WTN_SFT.yaml"
 MODEL:
-  WEIGHTS: "detectron2://ImageNetPretrained/MSRA/R-50.pkl"
-  BACKBONE:
-    NAME: "build_fcos_vovnet_fpn_backbone"
-  VOVNET:
-    OUT_FEATURES: ["stage3","stage4", "stage5"]
-  FPN:
-    IN_FEATURES: ["stage3","stage4", "stage5"]
+# BACKBONE:
+#NAME: "build_fcos_vovnet_fpn_backbone"
+#FREEZE_AT: 0
+#VOVNET:
+#OUT_FEATURES: ["stage3","stage4", "stage5"]
+#FPN:
+#IN_FEATURES: ["stage3","stage4", "stage5"]
   PROPOSAL_GENERATOR:
     NAME: "META_WTN_SFT"
   WTN_SFT:
-    IN_FEATURES: ["p3","p4", "p5","p6","p7"]
     NUM_CLASSES: 20
     NUM_CLS_CONVS: 3
     NUM_BOX_CONVS: 3
@@ -24,6 +23,6 @@ DATASAMPLER:
 SOLVER:
   IMS_PER_BATCH: 2
 INPUT:
-  MIN_SIZE_TRAIN: (320,)
+  MIN_SIZE_TRAIN: (480,)
 DATALOADER:
   NUM_WORKERS: 24
