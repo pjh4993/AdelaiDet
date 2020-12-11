@@ -104,8 +104,9 @@ class META_WTN_SFT(nn.Module):
                 results = self.meta_wtn_sft_outputs.predict_proposals(pred_logits, pred_deltas, pred_ctrness, que_locations, que_images.image_sizes)
                 batched_results.append(results)
 
-        for k, v in losses.items():
-            losses[k] = torch.stack(v).mean()
+        if self.training:
+            for k, v in losses.items():
+                losses[k] = torch.stack(v).mean()
 
         return batched_results, losses
 
@@ -138,11 +139,9 @@ class META_WTN_SFT(nn.Module):
             k_ctrness = nn.Softmax(dim=0)(k_ctrness)
             """
             prototype = (k_cls_feature).mean(dim=0)
-
             assert prototype.isnan().sum() == 0
 
             class_prototypes[k] = prototype
-            print(prototype.mean())
 
         return class_prototypes
 
