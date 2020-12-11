@@ -11,7 +11,8 @@ MODEL:
     NUM_CONVS: 3
     INT_CONV_CHANNEL: 32
     IN_FC_CHANNELS:  [16 , 4] #[4 * 16 * 256 2 * 8 * 256, 1 * 4 * 256]
-    #IN_FC_CHANNELS:  [ 60 , 16] #[ 4 * 15 * 256, 2 * 8 * 256]
+    #IN_FC_CHANNELS:  [ 60 , 16] #INPUT 128
+    #IN_FC_CHANNELS:  [ 240 , 60] #INPUT 256
     #OUT_FC_CHANNELS: [30 * 40 , 15 * 20 * 256, 8 * 10 * 256]
     OUT_FC_CHANNELS: [[15,20],[8,10]]
     IN_FEATURES: ["p5", "p6"]

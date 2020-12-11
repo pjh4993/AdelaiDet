@@ -2,10 +2,10 @@ _BASE_: "Base-NLOS.yaml"
 MODEL:
   NLOS_CONVERTER:
     NAME: "channel_preserving_nlos_converter"
-    NUM_CONVS: 1
-    INT_CONV_CHANNEL: 2
-    NORM: "none"
-  FCOS:
-    NORM: "none"
-DATALOADER:
-  NUM_WORKERS: 12
+    INT_CONV_CHANNEL: 256
+    IN_FC_CHANNELS:  [16 , 4] #[4 * 16 * 256 2 * 8 * 256, 1 * 4 * 256]
+    OUT_FC_CHANNELS: [[15,20],[8,10]]
+    IN_FEATURES: ["p5", "p6"]
+DATASETS:
+  TRAIN: ("nlos_2020_train",)
+  TEST: ("nlos_2020_train",)
