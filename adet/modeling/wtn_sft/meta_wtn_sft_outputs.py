@@ -383,6 +383,12 @@ class META_WTN_SFTOutputs(nn.Module):
             reduction="sum",
         ) / num_pos_avg
 
+        logger.info(
+            "positive cls score mean : {pos_score:.3f} negative cls score mean : {neg_score:.3f}".format(
+                pos_score = instances.logits_pred.sigmoid()[pos_inds, ind].mean(),
+                neg_score = instances.logits_pred.sigmoid().mean(),
+            )
+        )
         assert class_loss.isnan().sum() == 0
 
         instances = instances[pos_inds]

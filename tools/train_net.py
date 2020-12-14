@@ -159,7 +159,10 @@ class Trainer(DefaultTrainer):
         if evaluator_type == "coco_panoptic_seg":
             evaluator_list.append(COCOPanopticEvaluator(dataset_name, output_folder))
         if evaluator_type == "pascal_voc":
-            return PascalVOCDetectionEvaluator(dataset_name)
+            if class_wise_grouping:
+                evaluator_list.append(METACOCOEvaluator(dataset_name, cfg, True, output_folder))
+            else:
+                return PascalVOCDetectionEvaluator(dataset_name)
         if evaluator_type == "lvis":
             return LVISEvaluator(dataset_name, cfg, True, output_folder)
         if evaluator_type == "text":
