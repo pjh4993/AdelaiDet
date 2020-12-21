@@ -524,7 +524,7 @@ MODEL:
     - stage3
     - stage4
     - stage5
-  WEIGHTS: ''
+  WEIGHTS: 'output/FCOS-Detection/MS_R_50_2x/model_final.pth'
   WTN_SFT:
     CENTER_SAMPLE: true
     CTRNESS_ON_BBOX: true
@@ -577,7 +577,7 @@ SOLVER:
   CLIP_GRADIENTS:
     CLIP_TYPE: value
     CLIP_VALUE: 1.0
-    ENABLED: false
+    ENABLED: True
     NORM_TYPE: 2.0
   GAMMA: 0.1
   IMS_PER_BATCH: 2

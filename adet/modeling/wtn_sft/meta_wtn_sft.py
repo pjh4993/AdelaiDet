@@ -1,3 +1,4 @@
+from collections import defaultdict
 import math
 import numpy as np
 from typing import List, Dict
@@ -59,11 +60,7 @@ class META_WTN_SFT(nn.Module):
 
     def forward(self, batched_images, batched_features, batched_gt_instances):
         batched_results = []
-        losses = {
-            "loss_wtn_sft_cls": [],
-            "loss_wtn_sft_loc": [],
-            "loss_wtn_sft_ctr": [],
-        }
+        losses = defaultdict(list)
 
         for [sup_images, que_images], [sup_features, que_features], gt_instances in zip(batched_images, batched_features, batched_gt_instances):
             
@@ -92,12 +89,12 @@ class META_WTN_SFT(nn.Module):
                 "gt_instances": que_gt_instances,
             }
 
-            prototypes = self.calculate_prototype(supp_set, sup_locations, gt_labels)
+            prototypes, top_feature = self.calculate_prototype(supp_set, sup_locations, gt_labels)
 
             pred_logits, pred_deltas, pred_ctrness = self.feature_extractor.forward_with_prototype(query_set, prototypes)
 
             if self.training:
-                extra, loss = self.meta_wtn_sft_outputs.losses(pred_logits, pred_deltas, pred_ctrness, que_locations, query_set["gt_instances"], gt_labels)
+                extra, loss = self.meta_wtn_sft_outputs.losses(pred_logits, pred_deltas, pred_ctrness, que_locations, query_set["gt_instances"], gt_labels, top_feature)
                 for k, v in loss.items():
                     losses[k].append(loss[k])
             else:
@@ -129,6 +126,7 @@ class META_WTN_SFT(nn.Module):
         pos_per_label = {k.item() : torch.nonzero(labels == k).squeeze(1) for k in gt_labels}
         ctrness_targets = compute_ctrness_targets(instances.reg_targets)
         class_prototypes = {}
+        class_top_feature = {}
 
         for k, pos in pos_per_label.items():
             assert len(pos) != 0
@@ -138,12 +136,16 @@ class META_WTN_SFT(nn.Module):
             k_ctrness[k_ctrness.isnan()] = 0
             k_ctrness = nn.Softmax(dim=0)(k_ctrness)
             """
-            prototype = (k_cls_feature).mean(dim=0)
+            prototype = k_cls_feature.mean(dim=0)
+            proto_std = k_cls_feature
             assert prototype.isnan().sum() == 0
 
             class_prototypes[k] = prototype
+            class_top_feature[k] = proto_std
+            print("prototype feature's mean: {proto_mean:.3f}".format(proto_mean=prototype.mean()))
+            assert prototype.mean() < 10.0
 
-        return class_prototypes
+        return class_prototypes, class_top_feature
 
     def split_by_sampler(self, images, cls_features, bbox_features, gt_instances):
         n_per = self.k_shot + self.q_query
@@ -283,7 +285,7 @@ class META_WTN_SFT_Head(nn.Module):
 
             bbox_tower = self.bbox_tower(feature)
 
-            cls_features.append(cls_tower)
+            cls_features.append(cls_tower.sigmoid())
             bbox_features.append(bbox_tower)
 
         return cls_features, bbox_features
@@ -323,6 +325,5 @@ class META_WTN_SFT_Head(nn.Module):
             assert reg.isnan().sum() == 0
             # Note that we use relu, as in the improved WTN_SFT, instead of exp.
             bbox_reg.append(F.relu(reg))
-
 
         return logits, bbox_reg, ctrness
