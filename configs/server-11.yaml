@@ -16,9 +16,9 @@ DATASETS:
   PROPOSAL_FILES_TEST: []
   PROPOSAL_FILES_TRAIN: []
   TEST:
-  - coco_2017_val
+  - syntheticSKU_valid
   TRAIN:
-  - coco_2017_train
+  - syntheticSKU_train
 GLOBAL:
   HACK: 1.0
 INPUT:
@@ -34,9 +34,9 @@ INPUT:
   MASK_FORMAT: polygon
   MAX_SIZE_TEST: 1333
   MAX_SIZE_TRAIN: 1333
-  MIN_SIZE_TEST: 800
+  MIN_SIZE_TEST: 1400
   MIN_SIZE_TRAIN:
-  - 800
+  - 1400
   MIN_SIZE_TRAIN_SAMPLING: choice
 MODEL:
   ANCHOR_GENERATOR:
