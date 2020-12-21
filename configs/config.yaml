@@ -8,17 +8,17 @@ DATALOADER:
 DATASAMPLER:
   CLASSWISE_SAMPLER:
     K_SHOT: 2
-    N_WAY: 3
-    Q_QUERY: 2
+    N_WAY: 2
+    Q_QUERY: 1
 DATASETS:
   PRECOMPUTED_PROPOSAL_TOPK_TEST: 1000
   PRECOMPUTED_PROPOSAL_TOPK_TRAIN: 2000
   PROPOSAL_FILES_TEST: []
   PROPOSAL_FILES_TRAIN: []
   TEST:
-  - coco_2017_train
+  - coco_2017_val
   TRAIN:
-  - coco_2017_valid
+  - coco_2017_val
 GLOBAL:
   HACK: 1.0
 INPUT:
@@ -34,11 +34,9 @@ INPUT:
   MASK_FORMAT: polygon
   MAX_SIZE_TEST: 1333
   MAX_SIZE_TRAIN: 1333
-  MIN_SIZE_TEST: 520
+  MIN_SIZE_TEST: 800
   MIN_SIZE_TRAIN:
-  - 480
-  - 520
-  - 640
+  - 800
   MIN_SIZE_TRAIN_SAMPLING: choice
 MODEL:
   ANCHOR_GENERATOR:
@@ -526,7 +524,7 @@ MODEL:
     - stage3
     - stage4
     - stage5
-  WEIGHTS: ''
+  WEIGHTS: 'output/FCOS-Detection/MS_R_50_2x/model_final.pth'
   WTN_SFT:
     CENTER_SAMPLE: true
     CTRNESS_ON_BBOX: true
@@ -579,7 +577,7 @@ SOLVER:
   CLIP_GRADIENTS:
     CLIP_TYPE: value
     CLIP_VALUE: 1.0
-    ENABLED: false
+    ENABLED: True
     NORM_TYPE: 2.0
   GAMMA: 0.1
   IMS_PER_BATCH: 2

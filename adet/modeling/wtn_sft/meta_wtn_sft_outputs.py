@@ -1,4 +1,5 @@
 import logging
+import itertools
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -10,7 +11,7 @@ from fvcore.nn import sigmoid_focal_loss_jit
 import numpy as np
 
 from adet.utils.comm import reduce_sum
-from adet.layers import ml_nms, IOULoss, IDLoss
+from adet.layers import id_loss, ml_nms, IOULoss, IDLoss
 
 
 logger = logging.getLogger(__name__)
@@ -148,6 +149,53 @@ class META_WTN_SFTOutputs(nn.Module):
 
         return training_targets
 
+    def get_sample_region_by_dist(self, boxes, strides, num_loc_list, loc_xs, loc_ys, bitmasks=None, radius=1):
+        if bitmasks is not None:
+            _, h, w = bitmasks.size()
+
+            ys = torch.arange(0, h, dtype=torch.float32, device=bitmasks.device)
+            xs = torch.arange(0, w, dtype=torch.float32, device=bitmasks.device)
+
+            m00 = bitmasks.sum(dim=-1).sum(dim=-1).clamp(min=1e-6)
+            m10 = (bitmasks * xs).sum(dim=-1).sum(dim=-1)
+            m01 = (bitmasks * ys[:, None]).sum(dim=-1).sum(dim=-1)
+            center_x = m10 / m00
+            center_y = m01 / m00
+        else:
+            center_x = boxes[..., [0, 2]].sum(dim=-1) * 0.5
+            center_y = boxes[..., [1, 3]].sum(dim=-1) * 0.5
+
+        num_gts = boxes.shape[0]
+        K = len(loc_xs)
+        boxes = boxes[None].expand(K, num_gts, 4)
+        center_x = center_x[None].expand(K, num_gts)
+        center_y = center_y[None].expand(K, num_gts)
+        center_gt = boxes.new_zeros(boxes.shape)
+        # no gt
+        if center_x.numel() == 0 or center_x[..., 0].sum() == 0:
+            return loc_xs.new_zeros(loc_xs.shape, dtype=torch.uint8)
+        beg = 0
+        for level, num_loc in enumerate(num_loc_list):
+            end = beg + num_loc
+            stride = strides[level] * radius
+            xmin = center_x[beg:end] - stride
+            ymin = center_y[beg:end] - stride
+            xmax = center_x[beg:end] + stride
+            ymax = center_y[beg:end] + stride
+            # limit sample region in gt
+            center_gt[beg:end, :, 0] = torch.where(xmin < boxes[beg:end, :, 0], xmin, boxes[beg:end, :, 0])
+            center_gt[beg:end, :, 1] = torch.where(ymin < boxes[beg:end, :, 1], ymin, boxes[beg:end, :, 1])
+            center_gt[beg:end, :, 2] = torch.where(xmax < boxes[beg:end, :, 2], boxes[beg:end, :, 2], xmax)
+            center_gt[beg:end, :, 3] = torch.where(ymax < boxes[beg:end, :, 3], boxes[beg:end, :, 3], ymax)
+            beg = end
+        left = loc_xs[:, None] - center_gt[..., 0]
+        right = center_gt[..., 2] - loc_xs[:, None]
+        top = loc_ys[:, None] - center_gt[..., 1]
+        bottom = center_gt[..., 3] - loc_ys[:, None]
+        center_bbox = torch.stack((left, top, right, bottom), -1)
+        inside_gt_bbox_mask = center_bbox.min(-1)[0] > 0
+        return inside_gt_bbox_mask
+
     def get_sample_region(self, boxes, strides, num_loc_list, loc_xs, loc_ys, bitmasks=None, radius=1):
         if bitmasks is not None:
             _, h, w = bitmasks.size()
@@ -194,7 +242,7 @@ class META_WTN_SFTOutputs(nn.Module):
         center_bbox = torch.stack((left, top, right, bottom), -1)
         inside_gt_bbox_mask = center_bbox.min(-1)[0] > 0
         return inside_gt_bbox_mask
-
+    
     def compute_targets_for_locations(self, locations, targets, size_ranges, num_loc_list, num_classes):
         labels = []
         reg_targets = []
@@ -233,7 +281,12 @@ class META_WTN_SFTOutputs(nn.Module):
             else:
                 is_in_radius = is_in_boxes
 
-            max_reg_targets_per_im = reg_targets_per_im.max(dim=2)[0]
+            lr_max_reg_targets_per_im = reg_targets_per_im[:,:,[0,2]].max(dim=2)[0]
+            tb_max_reg_targets_per_im = reg_targets_per_im[:,:,[1,3]].max(dim=2)[0]
+            max_reg_targets_per_im = torch.min(lr_max_reg_targets_per_im, tb_max_reg_targets_per_im)
+
+            #max_reg_targets_per_im = reg_targets_per_im.max(dim=2)[0]
+
             # limit the regression range for each location
             is_cared_in_the_level = \
                 (max_reg_targets_per_im >= size_ranges[:, [0]]) & \
@@ -254,6 +307,9 @@ class META_WTN_SFTOutputs(nn.Module):
 
             labels.append(labels_per_im)
             reg_targets.append(reg_targets_per_im)
+            print("out of bound box : {:.3f}".format(
+                (reg_targets_per_im[(is_in_radius * is_cared_in_the_level).any(dim=1)] < 0).sum()
+            ))
 
         return {
             "labels": labels,
@@ -304,7 +360,7 @@ class META_WTN_SFTOutputs(nn.Module):
 
         return instances
     
-    def losses(self, logits_pred, reg_pred, ctrness_pred, locations, gt_instances, gt_labels):
+    def losses(self, logits_pred, reg_pred, ctrness_pred, locations, gt_instances, gt_labels, top_feature):
         """
         Return the losses from a set of WTN_SFT predictions and their associated ground-truth.
 
@@ -350,10 +406,10 @@ class META_WTN_SFTOutputs(nn.Module):
             x.permute(0, 2, 3, 1).reshape(-1) for x in ctrness_pred
         ], dim=0,)
 
-        return self.wtn_sft_losses(instances, gt_labels)
+        return self.wtn_sft_losses(instances, gt_labels, top_feature)
  
 
-    def wtn_sft_losses(self, instances, gt_labels):
+    def wtn_sft_losses(self, instances, gt_labels, top_feature):
         num_classes = instances.logits_pred.size(1)
 
         assert num_classes == len(gt_labels)
@@ -382,11 +438,22 @@ class META_WTN_SFTOutputs(nn.Module):
             gamma=self.focal_loss_gamma,
             reduction="sum",
         ) / num_pos_avg
+        
+        top_feature_list = []
+        top_feature_target = []
+        for tid, feature in top_feature.items():
+            top_feature_list.append(feature)
+            top_feature_target.append(torch.ones((len(feature))) * tid)
+        
+        prototype_diff_loss = IDLoss()(cat(top_feature_list, dim=0), cat(top_feature_target, dim=0))
 
-        logger.info(
-            "positive cls score mean : {pos_score:.3f} negative cls score mean : {neg_score:.3f}".format(
-                pos_score = instances.logits_pred.sigmoid()[pos_inds, ind].mean(),
-                neg_score = instances.logits_pred.sigmoid().mean(),
+
+        inv_ind = [1-x for x in ind]
+        print(
+            "diff: {diff:.3f} pos mean: {pos_mean:.3f} neg_mean: {neg_mean:.3f}".format(
+                diff=torch.abs(instances.logits_pred.sigmoid()[pos_inds, ind] - instances.logits_pred.sigmoid()[pos_inds, inv_ind]).mean(),
+                pos_mean=instances.logits_pred[pos_inds, ind].sigmoid().mean(),
+                neg_mean=instances.logits_pred[pos_inds, inv_ind].sigmoid().mean()
             )
         )
         assert class_loss.isnan().sum() == 0
@@ -422,6 +489,7 @@ class META_WTN_SFTOutputs(nn.Module):
             "loss_wtn_sft_cls": class_loss,
             "loss_wtn_sft_loc": reg_loss,
             "loss_wtn_sft_ctr": ctrness_loss,
+            #"loss_wtn_sft_proto": prototype_diff_loss,
         }
         extras = {
             "instances": instances,
