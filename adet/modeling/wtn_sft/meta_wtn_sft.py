@@ -124,7 +124,7 @@ class META_WTN_SFT(nn.Module):
         cls_features = instances.cls_features
 
         pos_per_label = {k.item() : torch.nonzero(labels == k).squeeze(1) for k in gt_labels}
-        ctrness_targets = compute_diagrate_targets(instances.reg_targets)
+        #ctrness_targets = compute_diagrate_targets(instances.reg_targets)
         class_prototypes = {}
         class_top_feature = {}
 

@@ -54,7 +54,7 @@ def compute_diagrate_targets(reg_targets):
     xy = reg_targets[:,:2]
     wh = reg_targets[:,2:] * 0.5
     diag_rate = torch.norm(xy, dim=1) / (torch.norm(wh, dim=1) * 1.5 + 1e-5)
-    return 1 - diag_rate
+    return torch.clip(1 - diag_rate , min=0)
 
 def compute_pi_diag_targets(reg_targets):
     if len(reg_targets) == 0:
@@ -189,7 +189,7 @@ class META_WTN_SFTOutputs(nn.Module):
         for level, num_loc in enumerate(num_loc_list):
             end = beg + num_loc
             stride = strides[level] * radius
-            center_dist[beg:end, :] = torch.clip(center_dist[beg:end, :] - diag_dist, min=0) / stride
+            center_dist[beg:end, :] = center_dist[beg:end, :] / stride
             beg = end
         inside_gt_bbox_mask = center_dist <= 1.0
         assert len(inside_gt_bbox_mask.nonzero()) > 0
@@ -288,9 +288,12 @@ class META_WTN_SFTOutputs(nn.Module):
             else:
                 is_in_radius = is_in_boxes
 
+            """
             lr_max_reg_targets_per_im = reg_targets_per_im[:,:,[0,2]].max(dim=2)[0]
             tb_max_reg_targets_per_im = reg_targets_per_im[:,:,[1,3]].max(dim=2)[0]
             max_reg_targets_per_im = torch.min(lr_max_reg_targets_per_im, tb_max_reg_targets_per_im)
+            """
+            max_reg_targets_per_im = reg_targets_per_im[:,:,2:].min(dim=2)[0]
 
             #max_reg_targets_per_im = reg_targets_per_im.max(dim=2)[0]
 
@@ -316,6 +319,7 @@ class META_WTN_SFTOutputs(nn.Module):
             reg_targets.append(reg_targets_per_im)
 
             assert len((labels_per_im != -1).nonzero()) > 0
+            assert (compute_diagrate_targets(reg_targets_per_im[labels_per_im != -1]) < 1.0).all() == True
 
         return {
             "labels": labels,
