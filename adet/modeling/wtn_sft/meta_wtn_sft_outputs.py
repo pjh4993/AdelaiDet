@@ -11,7 +11,7 @@ from fvcore.nn import sigmoid_focal_loss_jit
 import numpy as np
 
 from adet.utils.comm import reduce_sum
-from adet.layers import id_loss, ml_nms, IOULoss, IDLoss
+from adet.layers import id_loss, ml_nms, IOULoss, IDLoss, IOULossXYbase
 
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,12 @@ def compute_ctrness_targets(reg_targets):
                  (top_bottom.min(dim=-1)[0] / top_bottom.max(dim=-1)[0])
     return torch.sqrt(ctrness)
 
+def compute_diagrate_targets(reg_targets):
+    xy = reg_targets[:,:2]
+    wh = reg_targets[:,2:] * 0.5
+    diag_rate = torch.norm(xy, dim=1) / (torch.norm(wh, dim=1) * 1.5 + 1e-5)
+    return 1 - diag_rate
+
 def compute_pi_diag_targets(reg_targets):
     if len(reg_targets) == 0:
         return reg_targets.new_zeros(len(reg_targets))
@@ -72,7 +78,8 @@ class META_WTN_SFTOutputs(nn.Module):
         self.pre_nms_thresh_train = cfg.MODEL.WTN_SFT.INFERENCE_TH_TRAIN
         self.pre_nms_topk_train = cfg.MODEL.WTN_SFT.PRE_NMS_TOPK_TRAIN
         self.post_nms_topk_train = cfg.MODEL.WTN_SFT.POST_NMS_TOPK_TRAIN
-        self.loc_loss_func = IOULoss(cfg.MODEL.WTN_SFT.LOC_LOSS_TYPE)
+        #self.loc_loss_func = IOULoss(cfg.MODEL.WTN_SFT.LOC_LOSS_TYPE)
+        self.loc_loss_func = IOULossXYbase(cfg.MODEL.WTN_SFT.LOC_LOSS_TYPE)
 
         self.pre_nms_thresh_test = cfg.MODEL.WTN_SFT.INFERENCE_TH_TEST
         self.pre_nms_topk_test = cfg.MODEL.WTN_SFT.PRE_NMS_TOPK_TEST
@@ -164,6 +171,9 @@ class META_WTN_SFTOutputs(nn.Module):
         else:
             center_x = boxes[..., [0, 2]].sum(dim=-1) * 0.5
             center_y = boxes[..., [1, 3]].sum(dim=-1) * 0.5
+            diag_x = (boxes[..., 2] - center_x).reshape(-1, 1)
+            diag_y = (boxes[..., 3] - center_y).reshape(-1, 1)
+            diag_dist = torch.norm(cat([diag_x, diag_y], dim=1), dim=1)
 
         num_gts = boxes.shape[0]
         K = len(loc_xs)
@@ -175,25 +185,14 @@ class META_WTN_SFTOutputs(nn.Module):
         if center_x.numel() == 0 or center_x[..., 0].sum() == 0:
             return loc_xs.new_zeros(loc_xs.shape, dtype=torch.uint8)
         beg = 0
+        center_dist = torch.norm(cat([(loc_xs[:,None] - center_x).unsqueeze(-1), (loc_ys[:,None] - center_y).unsqueeze(-1)], dim=2), dim=2)
         for level, num_loc in enumerate(num_loc_list):
             end = beg + num_loc
             stride = strides[level] * radius
-            xmin = center_x[beg:end] - stride
-            ymin = center_y[beg:end] - stride
-            xmax = center_x[beg:end] + stride
-            ymax = center_y[beg:end] + stride
-            # limit sample region in gt
-            center_gt[beg:end, :, 0] = torch.where(xmin < boxes[beg:end, :, 0], xmin, boxes[beg:end, :, 0])
-            center_gt[beg:end, :, 1] = torch.where(ymin < boxes[beg:end, :, 1], ymin, boxes[beg:end, :, 1])
-            center_gt[beg:end, :, 2] = torch.where(xmax < boxes[beg:end, :, 2], boxes[beg:end, :, 2], xmax)
-            center_gt[beg:end, :, 3] = torch.where(ymax < boxes[beg:end, :, 3], boxes[beg:end, :, 3], ymax)
+            center_dist[beg:end, :] = torch.clip(center_dist[beg:end, :] - diag_dist, min=0) / stride
             beg = end
-        left = loc_xs[:, None] - center_gt[..., 0]
-        right = center_gt[..., 2] - loc_xs[:, None]
-        top = loc_ys[:, None] - center_gt[..., 1]
-        bottom = center_gt[..., 3] - loc_ys[:, None]
-        center_bbox = torch.stack((left, top, right, bottom), -1)
-        inside_gt_bbox_mask = center_bbox.min(-1)[0] > 0
+        inside_gt_bbox_mask = center_dist <= 1.0
+        assert len(inside_gt_bbox_mask.nonzero()) > 0
         return inside_gt_bbox_mask
 
     def get_sample_region(self, boxes, strides, num_loc_list, loc_xs, loc_ys, bitmasks=None, radius=1):
@@ -241,7 +240,7 @@ class META_WTN_SFTOutputs(nn.Module):
         bottom = center_gt[..., 3] - loc_ys[:, None]
         center_bbox = torch.stack((left, top, right, bottom), -1)
         inside_gt_bbox_mask = center_bbox.min(-1)[0] > 0
-        return inside_gt_bbox_mask
+        return inside_gt_bbox_mask.reshape(-1, 1)
     
     def compute_targets_for_locations(self, locations, targets, size_ranges, num_loc_list, num_classes):
         labels = []
@@ -262,11 +261,19 @@ class META_WTN_SFTOutputs(nn.Module):
 
             area = targets_per_im.gt_boxes.area()
 
+            """
             l = xs[:, None] - bboxes[:, 0][None]
             t = ys[:, None] - bboxes[:, 1][None]
             r = bboxes[:, 2][None] - xs[:, None]
             b = bboxes[:, 3][None] - ys[:, None]
             reg_targets_per_im = torch.stack([l, t, r, b], dim=2)
+            """
+
+            x = (bboxes[:, 0][None] + bboxes[:, 2][None]) * 0.5 - xs[:, None]
+            y = (bboxes[:, 1][None] + bboxes[:, 3][None]) * 0.5 - ys[:, None]
+            w = (bboxes[:, 2] - bboxes[:, 0]).expand_as(x)
+            h = (bboxes[:, 3] - bboxes[:, 1]).expand_as(x)
+            reg_targets_per_im = torch.stack([x, y, w, h], dim=2)
 
             is_in_boxes = reg_targets_per_im.min(dim=2)[0] > 0
             if self.center_sample:
@@ -274,7 +281,7 @@ class META_WTN_SFTOutputs(nn.Module):
                     bitmasks = targets_per_im.gt_bitmasks_full
                 else:
                     bitmasks = None
-                is_in_radius = self.get_sample_region(
+                is_in_radius = self.get_sample_region_by_dist(
                     bboxes, self.strides, num_loc_list, xs, ys,
                     bitmasks=bitmasks, radius=self.radius
                 )
@@ -307,9 +314,8 @@ class META_WTN_SFTOutputs(nn.Module):
 
             labels.append(labels_per_im)
             reg_targets.append(reg_targets_per_im)
-            print("out of bound box : {:.3f}".format(
-                (reg_targets_per_im[(is_in_radius * is_cared_in_the_level).any(dim=1)] < 0).sum()
-            ))
+
+            assert len((labels_per_im != -1).nonzero()) > 0
 
         return {
             "labels": labels,
@@ -463,7 +469,8 @@ class META_WTN_SFTOutputs(nn.Module):
 
         #assert (instances.gt_inds.unique() != gt_object.unique()).sum() == 0
 
-        ctrness_targets = compute_ctrness_targets(instances.reg_targets)
+        #ctrness_targets = compute_ctrness_targets(instances.reg_targets)
+        ctrness_targets = compute_diagrate_targets(instances.reg_targets)
         ctrness_targets_sum = ctrness_targets.sum()
         loss_denorm = max(reduce_sum(ctrness_targets_sum).item() / num_gpus, 1e-6)
         instances.gt_ctrs = ctrness_targets

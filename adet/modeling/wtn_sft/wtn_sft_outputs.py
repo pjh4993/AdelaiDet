@@ -10,7 +10,7 @@ from fvcore.nn import sigmoid_focal_loss_jit
 import numpy as np
 
 from adet.utils.comm import reduce_sum
-from adet.layers import ml_nms, IOULoss, IDLoss
+from adet.layers import ml_nms, IOULoss, IDLoss, IOULossXYbase
 
 
 logger = logging.getLogger(__name__)
@@ -72,6 +72,7 @@ class WTN_SFTOutputs(nn.Module):
         self.pre_nms_topk_train = cfg.MODEL.WTN_SFT.PRE_NMS_TOPK_TRAIN
         self.post_nms_topk_train = cfg.MODEL.WTN_SFT.POST_NMS_TOPK_TRAIN
         self.loc_loss_func = IOULoss(cfg.MODEL.WTN_SFT.LOC_LOSS_TYPE)
+        #self.loc_loss_func = IOULossXYbase(cfg.MODEL.WTN_SFT.LOC_LOSS_TYPE)
 
         self.pre_nms_thresh_test = cfg.MODEL.WTN_SFT.INFERENCE_TH_TEST
         self.pre_nms_topk_test = cfg.MODEL.WTN_SFT.PRE_NMS_TOPK_TEST

@@ -12,7 +12,7 @@ class IOULossXYbase(nn.Module):
     * gIoU
     """
     def __init__(self, loc_loss_type='iou'):
-        super(IOULoss, self).__init__()
+        super(IOULossXYbase, self).__init__()
         self.loc_loss_type = loc_loss_type
 
     def forward(self, pred, target, weight=None):
@@ -32,21 +32,28 @@ class IOULossXYbase(nn.Module):
         target_width = target[:, 2]
         target_height = target[:, 3]
 
-        target_aera = target_width * target_height
-        pred_aera = pred_width * pred_height
+        min_base_x = torch.min(pred_x - pred_width * 0.5, target_x - target_width * 0.5).detach()
+        min_base_x = torch.abs(torch.min(torch.zeros_like(min_base_x), min_base_x))
+        min_base_y = torch.min(pred_y - pred_height * 0.5, target_y - target_height * 0.5).detach()
+        min_base_y = torch.abs(torch.min(torch.zeros_like(min_base_y), min_base_y))
 
-        min_base_x = torch.min(0, torch.abs(torch.min(pred_x - pred_width * 0.5, target_x - target_width*0.5).detach()))
-        min_base_y = torch.min(0, torch.abs(torch.min(pred_y - pred_height * 0.5, target_y - target_height*0.5).detach()))
+        pred_left = pred_x - pred_width * 0.5 + min_base_x
+        pred_right = pred_x + pred_width * 0.5 + min_base_x 
+        pred_top = pred_y - pred_height * 0.5 + min_base_y 
+        pred_bottom = pred_x + pred_height * 0.5 + min_base_x 
 
-        pred_left = pred_x + min_base_x - pred_width * 0.5
-        pred_right = pred_x + min_base_x + pred_width * 0.5
-        pred_top = pred_y + min_base_y - pred_height * 0.5
-        pred_bottom = pred_x + min_base_x + pred_height * 0.5
+        target_left = target_x - target_width * 0.5 + min_base_x 
+        target_right = target_x + target_width * 0.5 + min_base_x 
+        target_bottom = target_y - target_height * 0.5 + min_base_y 
+        target_top = target_y + target_height * 0.5 + min_base_y 
 
-        target_left = target_x + min_base_x - target_width * 0.5
-        target_right = target_x + min_base_x + target_width * 0.5
-        target_bottom = target_y + min_base_y - target_height * 0.5
-        target_top = target_y + min_base_y + target_height * 0.5
+        assert ((pred_left >= 0) * (pred_right >= 0) * (pred_top >= 0) * (pred_bottom >= 0) * \
+            (target_left >= 0) * (target_right >= 0) * (target_bottom >= 0) * (target_top >= 0)).all() == True
+
+        target_aera = (target_left + target_right) * \
+                      (target_top + target_bottom)
+        pred_aera = (pred_left + pred_right) * \
+                    (pred_top + pred_bottom)
 
         w_intersect = torch.min(pred_left, target_left) + \
                       torch.min(pred_right, target_right)

@@ -13,7 +13,7 @@ from adet.utils.comm import reduce_sum
 
 from adet.layers import DFConv2d, NaiveGroupNorm
 from adet.utils.comm import compute_locations, same_storage
-from .meta_wtn_sft_outputs import META_WTN_SFTOutputs, compute_ctrness_targets
+from .meta_wtn_sft_outputs import META_WTN_SFTOutputs, compute_ctrness_targets, compute_diagrate_targets
 from detectron2.structures.image_list import ImageList
 
 __all__ = ["META_WTN_SFT"]
@@ -124,7 +124,7 @@ class META_WTN_SFT(nn.Module):
         cls_features = instances.cls_features
 
         pos_per_label = {k.item() : torch.nonzero(labels == k).squeeze(1) for k in gt_labels}
-        ctrness_targets = compute_ctrness_targets(instances.reg_targets)
+        ctrness_targets = compute_diagrate_targets(instances.reg_targets)
         class_prototypes = {}
         class_top_feature = {}
 
@@ -324,6 +324,7 @@ class META_WTN_SFT_Head(nn.Module):
 
             assert reg.isnan().sum() == 0
             # Note that we use relu, as in the improved WTN_SFT, instead of exp.
-            bbox_reg.append(F.relu(reg))
+            bbox_reg.append(cat([reg[:,:2,:,:], F.relu(reg[:,2:,:,:])],dim=1))
+            #bbox_reg.append(F.relu(reg))
 
         return logits, bbox_reg, ctrness
