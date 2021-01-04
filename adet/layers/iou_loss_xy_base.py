@@ -81,7 +81,7 @@ class IOULossXYbase(nn.Module):
             losses = -torch.log((1 + gious)/2)*((1 - gious)/2)
         else:
             raise NotImplementedError
-
+        
         if weight is not None:
             return (losses * weight).sum()
         else:

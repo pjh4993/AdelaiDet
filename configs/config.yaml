@@ -16,7 +16,7 @@ DATASETS:
   PROPOSAL_FILES_TEST: []
   PROPOSAL_FILES_TRAIN: []
   TEST:
-  - coco_2017_val
+  - syntheticSKU_valid
   TRAIN:
   - coco_2017_val
 GLOBAL:

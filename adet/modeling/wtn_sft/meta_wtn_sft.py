@@ -324,7 +324,7 @@ class META_WTN_SFT_Head(nn.Module):
 
             assert reg.isnan().sum() == 0
             # Note that we use relu, as in the improved WTN_SFT, instead of exp.
-            bbox_reg.append(cat([reg[:,:2,:,:], F.relu(reg[:,2:,:,:])],dim=1))
+            bbox_reg.append(cat([reg[:,:2,:,:], reg[:,2:,:,:].exp()],dim=1))
             #bbox_reg.append(F.relu(reg))
 
         return logits, bbox_reg, ctrness
