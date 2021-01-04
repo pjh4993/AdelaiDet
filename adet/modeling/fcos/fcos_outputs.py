@@ -350,7 +350,8 @@ class FCOSOutputs(nn.Module):
                 instances.reg_targets,
                 #ctrness_targets
             )
-            class_loss[pos_inds] *= (1 - reg_loss/2).unsqueeze(1)
+            class_loss[pos_inds, labels[pos_inds]] *= (1 - reg_loss/2).detach()
+            #class_loss[pos_inds] *= (1 - reg_loss/2).unsqueeze(1).detach()
 
             reg_loss = reg_loss.sum() / loss_denorm
 
