@@ -65,4 +65,4 @@ class IOULoss(nn.Module):
         if weight is not None:
             return (losses * weight).sum()
         else:
-            return losses.sum()
+            return losses

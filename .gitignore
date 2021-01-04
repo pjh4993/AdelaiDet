@@ -54,3 +54,9 @@ demo/performance.py
 demo/demo2.py
 train.sh
 benchmark.sh
+datasets/nlos
+datasets/syntheticSKU
+datasets/VOC2012
+demo/input
+datasets/nlosGT
+data_dict.json

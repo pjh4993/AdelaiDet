@@ -333,7 +333,7 @@ class FCOSOutputs(nn.Module):
             class_target,
             alpha=self.focal_loss_alpha,
             gamma=self.focal_loss_gamma,
-            reduction="sum",
+            reduction="none",
         ) / num_pos_avg
 
         instances = instances[pos_inds]
@@ -348,8 +348,11 @@ class FCOSOutputs(nn.Module):
             reg_loss = self.loc_loss_func(
                 instances.reg_pred,
                 instances.reg_targets,
-                ctrness_targets
-            ) / loss_denorm
+                #ctrness_targets
+            )
+            class_loss[pos_inds] *= (1 - reg_loss/2).unsqueeze(1)
+
+            reg_loss = reg_loss.sum() / loss_denorm
 
             ctrness_loss = F.binary_cross_entropy_with_logits(
                 instances.ctrness_pred,
@@ -359,11 +362,13 @@ class FCOSOutputs(nn.Module):
         else:
             reg_loss = instances.reg_pred.sum() * 0
             ctrness_loss = instances.ctrness_pred.sum() * 0
+        
+        class_loss = class_loss.sum()
 
         losses = {
             "loss_fcos_cls": class_loss,
             "loss_fcos_loc": reg_loss,
-            "loss_fcos_ctr": ctrness_loss
+            #"loss_fcos_ctr": ctrness_loss
         }
         extras = {
             "instances": instances,
@@ -442,14 +447,19 @@ class FCOSOutputs(nn.Module):
 
         # if self.thresh_with_ctr is True, we multiply the classification
         # scores with centerness scores before applying the threshold.
+        """
         if self.thresh_with_ctr:
             logits_pred = logits_pred * ctrness_pred[:, :, None]
+        """
+
         candidate_inds = logits_pred > self.pre_nms_thresh
         pre_nms_top_n = candidate_inds.view(N, -1).sum(1)
         pre_nms_top_n = pre_nms_top_n.clamp(max=self.pre_nms_topk)
 
+        """
         if not self.thresh_with_ctr:
             logits_pred = logits_pred * ctrness_pred[:, :, None]
+        """
 
         results = []
         for i in range(N):
