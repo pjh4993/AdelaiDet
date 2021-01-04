@@ -10,6 +10,7 @@ from detectron2.modeling.proposal_generator.build import PROPOSAL_GENERATOR_REGI
 from adet.layers import DFConv2d, NaiveGroupNorm
 from adet.utils.comm import compute_locations
 from .fcos_outputs import FCOSOutputs
+import logging
 
 
 __all__ = ["FCOS"]
@@ -54,6 +55,7 @@ class FCOS(nn.Module):
         self.in_channels_to_top_module = self.fcos_head.in_channels_to_top_module
 
         self.fcos_outputs = FCOSOutputs(cfg)
+        self.cnt = 0
 
     def forward_head(self, features, top_module=None):
         features = [features[f] for f in self.in_features]
@@ -98,6 +100,12 @@ class FCOS(nn.Module):
                         logits_pred, reg_pred, ctrness_pred,
                         locations, images.image_sizes, top_feats
                     )
+
+            self.cnt+=1
+            if self.cnt % 20 == 19:
+                logging.getLogger(__name__).info(
+                    'ratio : {:02f}'.format(results['ratio'])
+                )
             return results, losses
         else:
             results = self.fcos_outputs.predict_proposals(

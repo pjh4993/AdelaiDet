@@ -52,6 +52,8 @@ _C.MODEL.FCOS.POS_RADIUS = 1.5
 _C.MODEL.FCOS.LOC_LOSS_TYPE = 'giou'
 _C.MODEL.FCOS.YIELD_PROPOSAL = False
 
+_C.MODEL.FCOS.TSS = "SSC"
+
 # ---------------------------------------------------------------------------- #
 # VoVNet backbone
 # ---------------------------------------------------------------------------- #

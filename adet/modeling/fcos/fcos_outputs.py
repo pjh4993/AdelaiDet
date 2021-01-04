@@ -4,7 +4,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from detectron2.layers import cat
-from detectron2.structures import Instances, Boxes
+from detectron2.structures import Instances, Boxes, pairwise_iou
 from detectron2.utils.comm import get_world_size
 from fvcore.nn import sigmoid_focal_loss_jit
 
@@ -70,6 +70,9 @@ class FCOSOutputs(nn.Module):
 
         self.num_classes = cfg.MODEL.FCOS.NUM_CLASSES
         self.strides = cfg.MODEL.FCOS.FPN_STRIDES
+        self.tss = cfg.MODEL.FCOS.TSS
+        self.ratio = []
+        self.save_rate = 0
 
         # generate sizes of interest
         soi = []
@@ -97,7 +100,7 @@ class FCOSOutputs(nn.Module):
             )
         return targets_level_first
 
-    def _get_ground_truth(self, locations, gt_instances):
+    def _get_ground_truth(self, locations, gt_instances, reg_pred):
         num_loc_list = [len(loc) for loc in locations]
 
         # compute locations to size ranges
@@ -111,9 +114,19 @@ class FCOSOutputs(nn.Module):
         loc_to_size_range = torch.cat(loc_to_size_range, dim=0)
         locations = torch.cat(locations, dim=0)
 
-        training_targets = self.compute_targets_for_locations(
-            locations, gt_instances, loc_to_size_range, num_loc_list
-        )
+        if self.tss == "ATSS":
+            training_targets = self.compute_targets_ATSS(
+                locations, gt_instances, loc_to_size_range, num_loc_list
+            )
+        elif self.tss == "DATSS":
+            training_targets = self.compute_targets_ATSS(
+                locations, gt_instances, loc_to_size_range, num_loc_list, reg_pred
+            )
+        else:
+            training_targets = self.compute_targets_for_locations(
+                locations, gt_instances, loc_to_size_range, num_loc_list,
+            )
+
 
         training_targets["locations"] = [locations.clone() for _ in range(len(gt_instances))]
         training_targets["im_inds"] = [
@@ -254,6 +267,130 @@ class FCOSOutputs(nn.Module):
             "target_inds": target_inds
         }
 
+    def locations_to_crit_box(self, locations, num_loc_list, xs, ys, reg_pred=None):
+        loc_to_crit_box = []
+
+        st = 0
+
+        for l, stride in enumerate(self.strides):
+            en = num_loc_list[l] + st
+            loc_to_anchor_size = locations[st:en].new_tensor(stride)
+            loc_to_anchor_size = loc_to_anchor_size[None].expand(num_loc_list[l])
+            curr_xs = xs[st:en]
+            curr_ys = ys[st:en]
+            if reg_pred == None:
+                anchor = cat([(curr_xs - loc_to_anchor_size / 2).unsqueeze(1), (curr_ys - loc_to_anchor_size / 2).unsqueeze(1), 
+                                (curr_xs + loc_to_anchor_size / 2).unsqueeze(1) , (curr_ys + loc_to_anchor_size / 2).unsqueeze(1)], dim=1)
+                loc_to_crit_box.append(anchor)
+            else:
+                curr_reg_pred = reg_pred[l].permute(1,2,0).reshape(-1, 4) * loc_to_anchor_size.unsqueeze(1)
+                pred_box = cat([(curr_xs - curr_reg_pred[:,0]).unsqueeze(1), (curr_ys - curr_reg_pred[:,1]).unsqueeze(1),
+                                   (curr_xs + curr_reg_pred[:,2]).unsqueeze(1), (curr_ys + curr_reg_pred[:,3]).unsqueeze(1)],dim=1)
+                loc_to_crit_box.append(pred_box)
+                
+            st = en
+
+        loc_to_crit_box = torch.cat(loc_to_crit_box, dim=0)
+
+        return loc_to_crit_box
+
+    def compute_targets_ATSS(self, locations, targets, size_ranges, num_loc_list, reg_pred=None):
+        labels = []
+        reg_targets = []
+        target_inds = []
+        xs, ys = locations[:, 0], locations[:, 1]
+
+        num_targets = 0
+        for im_i in range(len(targets)):
+            targets_per_im = targets[im_i]
+            bboxes = targets_per_im.gt_boxes.tensor
+            labels_per_im = targets_per_im.gt_classes
+
+            #calculate anchors based on locations. size of anchor is based on stride
+            loc_to_crit_box = self.locations_to_crit_box(locations, num_loc_list, xs, ys, 
+                                    [reg[im_i].detach() for reg in reg_pred] if reg_pred != None else None)
+
+            # no gt
+            if bboxes.numel() == 0:
+                labels.append(labels_per_im.new_zeros(locations.size(0)) + self.num_classes)
+                reg_targets.append(locations.new_zeros((locations.size(0), 4)))
+                target_inds.append(labels_per_im.new_zeros(locations.size(0)) - 1)
+                continue
+
+            pre_calc_IoU = pairwise_iou(Boxes(loc_to_crit_box), targets_per_im.gt_boxes)
+
+            area = targets_per_im.gt_boxes.area()
+
+            l = xs[:, None] - bboxes[:, 0][None]
+            t = ys[:, None] - bboxes[:, 1][None]
+            r = bboxes[:, 2][None] - xs[:, None]
+            b = bboxes[:, 3][None] - ys[:, None]
+            reg_targets_per_im = torch.stack([l, t, r, b], dim=2)
+
+            if self.center_sample:
+                if targets_per_im.has("gt_bitmasks_full"):
+                    bitmasks = targets_per_im.gt_bitmasks_full
+                else:
+                    bitmasks = None
+                is_in_boxes = self.get_sample_region(
+                    bboxes, self.strides, num_loc_list, xs, ys,
+                    bitmasks=bitmasks, radius=self.radius
+                )
+            else:
+                is_in_boxes = reg_targets_per_im.min(dim=2)[0] > 0
+
+            iou_thr = []
+            in_boxes = is_in_boxes.nonzero()
+            
+            prev_pos = is_in_boxes.sum()
+
+            for i in range(pre_calc_IoU.shape[1]):
+                per_idx = in_boxes[in_boxes[:,1] == i, 0]
+                mean = pre_calc_IoU[per_idx, i].mean()
+                std = pre_calc_IoU[per_idx, i].std()
+                if len(per_idx) > 1:
+                    iou_thr = mean + std * self.save_rate
+                else:
+                    iou_thr = mean
+                is_in_boxes[:,i]*=(pre_calc_IoU[:,i] >= iou_thr)
+            
+            self.save_rate += 2e-6
+
+            post_pos = is_in_boxes.sum()
+
+            self.ratio.append(post_pos / prev_pos)
+
+            max_reg_targets_per_im = reg_targets_per_im.max(dim=2)[0]
+            # limit the regression range for each location
+            is_cared_in_the_level = \
+                (max_reg_targets_per_im >= size_ranges[:, [0]]) & \
+                (max_reg_targets_per_im <= size_ranges[:, [1]])
+
+            locations_to_gt_area = area[None].repeat(len(locations), 1)
+            locations_to_gt_area[is_in_boxes == 0] = INF
+            locations_to_gt_area[is_cared_in_the_level == 0] = INF
+
+            # if there are still more than one objects for a location,
+            # we choose the one with minimal area
+            locations_to_min_area, locations_to_gt_inds = locations_to_gt_area.min(dim=1)
+
+            reg_targets_per_im = reg_targets_per_im[range(len(locations)), locations_to_gt_inds]
+            target_inds_per_im = locations_to_gt_inds + num_targets
+            num_targets += len(targets_per_im)
+
+            labels_per_im = labels_per_im[locations_to_gt_inds]
+            labels_per_im[locations_to_min_area == INF] = self.num_classes
+
+            labels.append(labels_per_im)
+            reg_targets.append(reg_targets_per_im)
+            target_inds.append(target_inds_per_im)
+
+        return {
+            "labels": labels,
+            "reg_targets": reg_targets,
+            "target_inds": target_inds
+        }
+
     def losses(self, logits_pred, reg_pred, ctrness_pred, locations, gt_instances, top_feats=None):
         """
         Return the losses from a set of FCOS predictions and their associated ground-truth.
@@ -262,7 +399,8 @@ class FCOSOutputs(nn.Module):
             dict[loss name -> loss value]: A dict mapping from loss name to loss value.
         """
 
-        training_targets = self._get_ground_truth(locations, gt_instances)
+        self.ratio = []
+        training_targets = self._get_ground_truth(locations, gt_instances, reg_pred)
 
         # Collect all logits and regression predictions over feature maps
         # and images to arrive at the same shape as the labels and targets
@@ -349,10 +487,10 @@ class FCOSOutputs(nn.Module):
                 instances.reg_pred,
                 instances.reg_targets,
                 #ctrness_targets
-            )
+            ) / loss_denorm
+
             class_loss[pos_inds, labels[pos_inds]] *= (1 - reg_loss/2).detach()
             #class_loss[pos_inds] *= (1 - reg_loss/2).unsqueeze(1).detach()
-
             reg_loss = reg_loss.sum() / loss_denorm
 
             ctrness_loss = F.binary_cross_entropy_with_logits(
@@ -373,7 +511,8 @@ class FCOSOutputs(nn.Module):
         }
         extras = {
             "instances": instances,
-            "loss_denorm": loss_denorm
+            "loss_denorm": loss_denorm,
+            "ratio" : sum(self.ratio) / len(self.ratio)
         }
         return extras, losses
 
