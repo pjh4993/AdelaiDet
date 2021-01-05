@@ -1,7 +1,9 @@
+from enum import unique
 import logging
 import torch
 from torch import nn
 import torch.nn.functional as F
+import copy
 
 from detectron2.layers import cat
 from detectron2.structures import Instances, Boxes, pairwise_iou
@@ -49,35 +51,44 @@ def compute_ctrness_targets(reg_targets):
     return torch.sqrt(ctrness)
 
 
-class FCOSOutputs(nn.Module):
+class ADCROutputs(nn.Module):
     def __init__(self, cfg):
-        super(FCOSOutputs, self).__init__()
+        super(ADCROutputs, self).__init__()
 
-        self.focal_loss_alpha = cfg.MODEL.FCOS.LOSS_ALPHA
-        self.focal_loss_gamma = cfg.MODEL.FCOS.LOSS_GAMMA
-        self.center_sample = cfg.MODEL.FCOS.CENTER_SAMPLE
-        self.radius = cfg.MODEL.FCOS.POS_RADIUS
-        self.pre_nms_thresh_train = cfg.MODEL.FCOS.INFERENCE_TH_TRAIN
-        self.pre_nms_topk_train = cfg.MODEL.FCOS.PRE_NMS_TOPK_TRAIN
-        self.post_nms_topk_train = cfg.MODEL.FCOS.POST_NMS_TOPK_TRAIN
-        self.loc_loss_func = IOULoss(cfg.MODEL.FCOS.LOC_LOSS_TYPE)
+        self.focal_loss_alpha = cfg.MODEL.ADCR.LOSS_ALPHA
+        self.focal_loss_gamma = cfg.MODEL.ADCR.LOSS_GAMMA
+        self.center_sample = cfg.MODEL.ADCR.CENTER_SAMPLE
+        self.radius = cfg.MODEL.ADCR.POS_RADIUS
+        self.pre_nms_thresh_train = cfg.MODEL.ADCR.INFERENCE_TH_TRAIN
+        self.pre_nms_topk_train = cfg.MODEL.ADCR.PRE_NMS_TOPK_TRAIN
+        self.post_nms_topk_train = cfg.MODEL.ADCR.POST_NMS_TOPK_TRAIN
+        self.loc_loss_func = IOULoss(cfg.MODEL.ADCR.LOC_LOSS_TYPE)
 
-        self.pre_nms_thresh_test = cfg.MODEL.FCOS.INFERENCE_TH_TEST
-        self.pre_nms_topk_test = cfg.MODEL.FCOS.PRE_NMS_TOPK_TEST
-        self.post_nms_topk_test = cfg.MODEL.FCOS.POST_NMS_TOPK_TEST
-        self.nms_thresh = cfg.MODEL.FCOS.NMS_TH
-        self.thresh_with_ctr = cfg.MODEL.FCOS.THRESH_WITH_CTR
+        self.pre_nms_thresh_test = cfg.MODEL.ADCR.INFERENCE_TH_TEST
+        self.pre_nms_topk_test = cfg.MODEL.ADCR.PRE_NMS_TOPK_TEST
+        self.post_nms_topk_test = cfg.MODEL.ADCR.POST_NMS_TOPK_TEST
+        self.nms_thresh = cfg.MODEL.ADCR.NMS_TH
+        self.thresh_with_ctr = cfg.MODEL.ADCR.THRESH_WITH_CTR
 
-        self.num_classes = cfg.MODEL.FCOS.NUM_CLASSES
-        self.strides = cfg.MODEL.FCOS.FPN_STRIDES
-        self.tss = cfg.MODEL.FCOS.TSS
-        self.ratio = []
-        self.save_rate = 0
+        self.num_classes = cfg.MODEL.ADCR.NUM_CLASSES
+        self.strides = cfg.MODEL.ADCR.FPN_STRIDES
+        self.tss = cfg.MODEL.ADCR.TSS
+        self.emb_dim = cfg.MODEL.ADCR.EMB_DIM
+
+        self.positive_sample_rate = cfg.MODEL.ADCR.POS_SAMPLE_RATE
+        self.pss_diff = (1 - self.positive_sample_rate) / (cfg.SOLVER.MAX_ITER * get_world_size())
+        self.in_cb, self.ext_cb = cfg.MODEL.ADCR.IN_CB, cfg.MODEL.ADCR.EXT_CB
+
+        self.RPSR = []
+        self.CPSR = []
+        self.PIoU_thr = []
+        self.PCLS_thr = []
+
 
         # generate sizes of interest
         soi = []
         prev_size = -1
-        for s in cfg.MODEL.FCOS.SIZES_OF_INTEREST:
+        for s in cfg.MODEL.ADCR.SIZES_OF_INTEREST:
             soi.append([prev_size, s])
             prev_size = s
         soi.append([prev_size, INF])
@@ -100,7 +111,7 @@ class FCOSOutputs(nn.Module):
             )
         return targets_level_first
 
-    def _get_ground_truth(self, locations, gt_instances, reg_pred):
+    def _get_ground_truth(self, locations, gt_instances, logits_pred, reg_pred):
         num_loc_list = [len(loc) for loc in locations]
 
         # compute locations to size ranges
@@ -115,12 +126,12 @@ class FCOSOutputs(nn.Module):
         locations = torch.cat(locations, dim=0)
 
         if self.tss == "ATSS":
-            training_targets = self.compute_targets_ATSS(
+            training_targets, num_objects = self.compute_targets_ATSS(
                 locations, gt_instances, loc_to_size_range, num_loc_list
             )
         elif self.tss == "DATSS":
-            training_targets = self.compute_targets_ATSS(
-                locations, gt_instances, loc_to_size_range, num_loc_list, reg_pred
+            training_targets, num_objects = self.compute_targets_ATSS(
+                locations, gt_instances, loc_to_size_range, num_loc_list, logits_pred, reg_pred
             )
         else:
             training_targets = self.compute_targets_for_locations(
@@ -148,7 +159,7 @@ class FCOSOutputs(nn.Module):
         for l in range(len(reg_targets)):
             reg_targets[l] = reg_targets[l] / float(self.strides[l])
 
-        return training_targets
+        return training_targets, num_objects
 
     def get_sample_region(self, boxes, strides, num_loc_list, loc_xs, loc_ys, bitmasks=None, radius=1):
         if bitmasks is not None:
@@ -294,30 +305,107 @@ class FCOSOutputs(nn.Module):
 
         return loc_to_crit_box
 
-    def compute_targets_ATSS(self, locations, targets, size_ranges, num_loc_list, reg_pred=None):
-        labels = []
-        reg_targets = []
-        target_inds = []
+    def regression_positive_sample_seleciton(self, locations, num_loc_list, reg_pred, gt_boxes, pos_inds):
+        """
+        Regression positive sample selection part
+
+        1. Calculate IOU between prediction box and given GT instances            
+        2. Get mean and std of IOU per GT instances
+        3. set positive index as ( is_in_box && IOU > mean + std * labmd_sched )
+        """
+
         xs, ys = locations[:, 0], locations[:, 1]
 
-        num_targets = 0
+        #calculate anchors based on locations. size of anchor is based on stride
+        loc_to_crit_box = self.locations_to_crit_box(locations, num_loc_list, xs, ys, 
+                                reg_pred if reg_pred != None else None)
+
+        pre_calc_IoU = pairwise_iou(Boxes(loc_to_crit_box), gt_boxes)
+
+        iou_thr = []
+        in_boxes = pos_inds.nonzero()
+        
+        prev_pos = pos_inds.sum()
+
+        for i in range(pre_calc_IoU.shape[1]):
+            per_idx = in_boxes[in_boxes[:,1] == i, 0]
+            mean = pre_calc_IoU[per_idx, i].mean()
+            std = pre_calc_IoU[per_idx, i].std()
+            if len(per_idx) > 1:
+                iou_thr = mean + std * self.positive_sample_rate
+            else:
+                iou_thr = 0.0
+
+            if (pre_calc_IoU[:,i] >= iou_thr).sum() == 0:
+                iou_thr = 0.0
+            pos_inds[:,i]*=(pre_calc_IoU[:,i] >= iou_thr)
+            self.PIoU_thr.append(iou_thr)
+        
+        post_pos = pos_inds.sum()
+
+        self.RPSR.append(post_pos / prev_pos)
+
+        return pos_inds, pre_calc_IoU
+
+    def classification_positive_sample_seleciton(self, curr_classes, logits_pred, pos_inds):
+        """
+        Regression positive sample selection part
+
+        1. Get mean and std of classification score per GT instances
+        2. set positive index as ( is_in_box && IOU > mean + std * positive sample rate )
+        """
+
+        pairwise_cls = cat(logits_pred, dim=0).sigmoid().reshape(-1, self.num_classes)[:,curr_classes]
+
+        in_boxes = pos_inds.nonzero()
+        
+        prev_pos = pos_inds.sum()
+
+        for i in range(pairwise_cls.shape[1]):
+            per_idx = in_boxes[in_boxes[:,1] == i, 0]
+            mean = pairwise_cls[per_idx, i].mean()
+            std = pairwise_cls[per_idx, i].std()
+            if len(per_idx) > 1:
+                cls_thr = mean + std * self.positive_sample_rate
+            else:
+                cls_thr = 0.0
+            if (pairwise_cls[:,i] >= cls_thr).sum() == 0:
+                cls_thr = 0.0
+            pos_inds[:,i]*=(pairwise_cls[:,i] >= cls_thr)
+            self.PCLS_thr.append(cls_thr)
+        
+        post_pos = pos_inds.sum()
+
+        self.CPSR.append(post_pos / prev_pos)
+
+        return pos_inds
+
+
+    def compute_targets_ATSS(self, locations, targets, size_ranges, num_loc_list, logits_pred=None, reg_pred=None):
+        labels = []
+        reg_targets = []
+        iou_targets = []
+        cid_targets = []
+        rid_targets = []
+        #target_inds = []
+        xs, ys = locations[:, 0], locations[:, 1]
+
+        num_objects = 0
         for im_i in range(len(targets)):
             targets_per_im = targets[im_i]
             bboxes = targets_per_im.gt_boxes.tensor
             labels_per_im = targets_per_im.gt_classes
 
-            #calculate anchors based on locations. size of anchor is based on stride
-            loc_to_crit_box = self.locations_to_crit_box(locations, num_loc_list, xs, ys, 
-                                    [reg[im_i].detach() for reg in reg_pred] if reg_pred != None else None)
-
             # no gt
             if bboxes.numel() == 0:
                 labels.append(labels_per_im.new_zeros(locations.size(0)) + self.num_classes)
                 reg_targets.append(locations.new_zeros((locations.size(0), 4)))
-                target_inds.append(labels_per_im.new_zeros(locations.size(0)) - 1)
+                #target_inds.append(labels_per_im.new_zeros(locations.size(0)) - 1)
                 continue
 
-            pre_calc_IoU = pairwise_iou(Boxes(loc_to_crit_box), targets_per_im.gt_boxes)
+            """
+            Prepare area and is_in_box for usage in RPSS and CPSS
+            """
 
             area = targets_per_im.gt_boxes.area()
 
@@ -339,68 +427,88 @@ class FCOSOutputs(nn.Module):
             else:
                 is_in_boxes = reg_targets_per_im.min(dim=2)[0] > 0
 
-            iou_thr = []
-            in_boxes = is_in_boxes.nonzero()
-            
-            prev_pos = is_in_boxes.sum()
+            rpos_inds, iou_trg = self.regression_positive_sample_seleciton(locations, num_loc_list, 
+                [reg[im_i].detach().clone() for reg in reg_pred], 
+                targets_per_im.gt_boxes, copy.deepcopy(is_in_boxes))
 
-            for i in range(pre_calc_IoU.shape[1]):
-                per_idx = in_boxes[in_boxes[:,1] == i, 0]
-                mean = pre_calc_IoU[per_idx, i].mean()
-                std = pre_calc_IoU[per_idx, i].std()
-                if len(per_idx) > 1:
-                    iou_thr = mean + std * self.save_rate
-                else:
-                    iou_thr = mean
-                is_in_boxes[:,i]*=(pre_calc_IoU[:,i] >= iou_thr)
-            
-            self.save_rate += 2e-6
+            cpos_inds = self.classification_positive_sample_seleciton(targets_per_im.gt_classes,
+                [logit[im_i].detach().clone().reshape(self.num_classes,-1).t() for logit in logits_pred], 
+                copy.deepcopy(is_in_boxes))
 
-            post_pos = is_in_boxes.sum()
-
-            self.ratio.append(post_pos / prev_pos)
-
+            # !!! from here
+            locations_to_gt_area = area[None].repeat(len(locations), 1)
             max_reg_targets_per_im = reg_targets_per_im.max(dim=2)[0]
             # limit the regression range for each location
             is_cared_in_the_level = \
                 (max_reg_targets_per_im >= size_ranges[:, [0]]) & \
                 (max_reg_targets_per_im <= size_ranges[:, [1]])
 
-            locations_to_gt_area = area[None].repeat(len(locations), 1)
-            locations_to_gt_area[is_in_boxes == 0] = INF
-            locations_to_gt_area[is_cared_in_the_level == 0] = INF
+            #target_inds_per_im = locations_to_gt_inds + num_targets
 
-            # if there are still more than one objects for a location,
-            # we choose the one with minimal area
-            locations_to_min_area, locations_to_gt_inds = locations_to_gt_area.min(dim=1)
+            """
+            Solve multiple target anghor problem by using smallest area first policy
+            and apply positive sample index of both classification and regression
+            """
 
-            reg_targets_per_im = reg_targets_per_im[range(len(locations)), locations_to_gt_inds]
-            target_inds_per_im = locations_to_gt_inds + num_targets
-            num_targets += len(targets_per_im)
+            def solve_multiple_target(locations_to_gt_area, is_cared_in_the_level, pos_inds):
+                locations_to_gt_area[pos_inds == 0] = INF
+                locations_to_gt_area[is_cared_in_the_level == 0] = INF
+                locations_to_min_area, locations_to_gt_inds = locations_to_gt_area.min(dim=1)
 
-            labels_per_im = labels_per_im[locations_to_gt_inds]
-            labels_per_im[locations_to_min_area == INF] = self.num_classes
+                return locations_to_min_area, locations_to_gt_inds
+
+            cpos_to_min_area, cpos_to_gt_inds = solve_multiple_target(copy.deepcopy(locations_to_gt_area), 
+                    is_cared_in_the_level, cpos_inds)
+            rpos_to_min_area, rpos_to_gt_inds = solve_multiple_target(copy.deepcopy(locations_to_gt_area), 
+                    is_cared_in_the_level, rpos_inds)
+
+            labels_per_im = labels_per_im[cpos_to_gt_inds]
+            labels_per_im[cpos_to_min_area == INF] = self.num_classes
+
+            reg_targets_per_im = reg_targets_per_im[range(len(locations)), rpos_to_gt_inds]
+            iou_targets_per_im = iou_trg[range(len(locations)), rpos_to_gt_inds]
+            iou_targets_per_im[rpos_to_min_area == INF] = -1
+
+            cpos_to_gt_inds += num_objects
+            rpos_to_gt_inds += num_objects
+
+            cpos_to_gt_inds[cpos_to_min_area == INF] = -1
+            rpos_to_gt_inds[rpos_to_min_area == INF] = -1
 
             labels.append(labels_per_im)
             reg_targets.append(reg_targets_per_im)
-            target_inds.append(target_inds_per_im)
+            iou_targets.append(iou_targets_per_im)
+            cid_targets.append(cpos_to_gt_inds)
+            rid_targets.append(rpos_to_gt_inds)
+            #target_inds.append(target_inds_per_im)
+            num_objects += len(targets_per_im)
 
         return {
             "labels": labels,
             "reg_targets": reg_targets,
-            "target_inds": target_inds
-        }
+            "iou_targets": iou_targets,
+            "cid_targets": cid_targets,
+            "rid_targets": rid_targets,
+            #"target_inds": target_inds
+        }, num_objects
 
-    def losses(self, logits_pred, reg_pred, ctrness_pred, locations, gt_instances, top_feats=None):
+    def losses(self, logits_pred, reg_pred, cid_pred, rid_pred, iou_pred, locations, gt_instances, top_feats=None):
         """
-        Return the losses from a set of FCOS predictions and their associated ground-truth.
+        Return the losses from a set of ADCR predictions and their associated ground-truth.
 
         Returns:
             dict[loss name -> loss value]: A dict mapping from loss name to loss value.
         """
 
-        self.ratio = []
-        training_targets = self._get_ground_truth(locations, gt_instances, reg_pred)
+        # initialize statistics
+        self.RPSR = []
+        self.CPSR = []
+        self.PIoU_thr = []
+        self.PCLS_thr = []
+
+        training_targets, num_objects = self._get_ground_truth(locations, gt_instances, logits_pred, reg_pred)
+
+        self.positive_sample_rate += self.pss_diff
 
         # Collect all logits and regression predictions over feature maps
         # and images to arrive at the same shape as the labels and targets
@@ -411,10 +519,12 @@ class FCOSOutputs(nn.Module):
             # Reshape: (N, 1, Hi, Wi) -> (N*Hi*Wi,)
             x.reshape(-1) for x in training_targets["labels"]
         ], dim=0)
+        """
         instances.gt_inds = cat([
             # Reshape: (N, 1, Hi, Wi) -> (N*Hi*Wi,)
             x.reshape(-1) for x in training_targets["target_inds"]
         ], dim=0)
+        """
         instances.im_inds = cat([
             x.reshape(-1) for x in training_targets["im_inds"]
         ], dim=0)
@@ -422,6 +532,20 @@ class FCOSOutputs(nn.Module):
             # Reshape: (N, Hi, Wi, 4) -> (N*Hi*Wi, 4)
             x.reshape(-1, 4) for x in training_targets["reg_targets"]
         ], dim=0,)
+
+        instances.cid_targets = cat([
+            # Reshape: (N, Hi, Wi, 1) -> (N*Hi*Wi)
+            x.reshape(-1) for x in training_targets["cid_targets"]
+        ], dim=0,)
+        instances.rid_targets = cat([
+            # Reshape: (N, Hi, Wi, 1) -> (N*Hi*Wi)
+            x.reshape(-1) for x in training_targets["rid_targets"]
+        ], dim=0,)
+        instances.iou_targets = cat([
+            # Reshape: (N, Hi, Wi, 1) -> (N*Hi*Wi)
+            x.reshape(-1) for x in training_targets["iou_targets"]
+        ], dim=0,)
+
         instances.locations = cat([
             x.reshape(-1, 2) for x in training_targets["locations"]
         ], dim=0)
@@ -437,9 +561,17 @@ class FCOSOutputs(nn.Module):
             # Reshape: (N, B, Hi, Wi) -> (N, Hi, Wi, B) -> (N*Hi*Wi, B)
             x.permute(0, 2, 3, 1).reshape(-1, 4) for x in reg_pred
         ], dim=0,)
-        instances.ctrness_pred = cat([
+        instances.iou_pred = cat([
             # Reshape: (N, 1, Hi, Wi) -> (N*Hi*Wi,)
-            x.permute(0, 2, 3, 1).reshape(-1) for x in ctrness_pred
+            x.permute(0, 2, 3, 1).reshape(-1) for x in iou_pred
+        ], dim=0,)
+        instances.cid_pred = cat([
+            # Reshape: (N, D, Hi, Wi) -> (N*Hi*Wi,D)
+            x.permute(0, 2, 3, 1).reshape(-1, self.emb_dim) for x in cid_pred
+        ], dim=0,)
+        instances.rid_pred = cat([
+            # Reshape: (N, 1, Hi, Wi) -> (N*Hi*Wi,D)
+            x.permute(0, 2, 3, 1).reshape(-1, self.emb_dim) for x in rid_pred
         ], dim=0,)
 
         if len(top_feats) > 0:
@@ -448,76 +580,111 @@ class FCOSOutputs(nn.Module):
                 x.permute(0, 2, 3, 1).reshape(-1, x.size(1)) for x in top_feats
             ], dim=0,)
 
-        return self.fcos_losses(instances)
+        return self.adcr_losses(instances, num_objects)
 
-    def fcos_losses(self, instances):
+    def adcr_losses(self, instances, num_objects):
         num_classes = instances.logits_pred.size(1)
         assert num_classes == self.num_classes
 
-        labels = instances.labels.flatten()
+        # prepare num_pos_avgs
 
-        pos_inds = torch.nonzero(labels != num_classes).squeeze(1)
-        num_pos_local = pos_inds.numel()
+        labels = instances.labels.flatten()
+        piou = instances.iou_targets.flatten()
+
+        cpos_inds = torch.nonzero(labels != num_classes).squeeze(1)
+        rpos_inds = torch.nonzero(piou != -1).squeeze(1)
+
+        num_cpos_local = cpos_inds.numel()
+        num_rpos_local = rpos_inds.numel()
+
         num_gpus = get_world_size()
-        total_num_pos = reduce_sum(pos_inds.new_tensor([num_pos_local])).item()
-        num_pos_avg = max(total_num_pos / num_gpus, 1.0)
+
+        total_num_cpos = reduce_sum(cpos_inds.new_tensor([num_cpos_local])).item()
+        total_num_rpos = reduce_sum(rpos_inds.new_tensor([num_rpos_local])).item()
+
+        num_cpos_avg = max(total_num_cpos / num_gpus, 1.0)
+        num_rpos_avg = max(total_num_rpos / num_gpus, 1.0)
+
+        # classification loss
 
         # prepare one_hot
         class_target = torch.zeros_like(instances.logits_pred)
-        class_target[pos_inds, labels[pos_inds]] = 1
+        class_target[cpos_inds, labels[cpos_inds]] = 1
 
         class_loss = sigmoid_focal_loss_jit(
             instances.logits_pred,
             class_target,
             alpha=self.focal_loss_alpha,
             gamma=self.focal_loss_gamma,
-            reduction="none",
-        ) / num_pos_avg
+            reduction="sum",
+        ) / num_cpos_avg
 
-        instances = instances[pos_inds]
-        instances.pos_inds = pos_inds
+        # regression loss
+        
+        reg_pos_instances = instances[rpos_inds]
+        reg_pos_instances.pos_inds = rpos_inds
 
-        ctrness_targets = compute_ctrness_targets(instances.reg_targets)
-        ctrness_targets_sum = ctrness_targets.sum()
-        loss_denorm = max(reduce_sum(ctrness_targets_sum).item() / num_gpus, 1e-6)
-        instances.gt_ctrs = ctrness_targets
-
-        if pos_inds.numel() > 0:
+        if rpos_inds.numel() > 0:
             reg_loss = self.loc_loss_func(
-                instances.reg_pred,
-                instances.reg_targets,
+                reg_pos_instances.reg_pred,
+                reg_pos_instances.reg_targets,
                 #ctrness_targets
-            ) / loss_denorm
-
-            class_loss[pos_inds, labels[pos_inds]] *= (1 - reg_loss/2).detach()
+            ).mean()
+            #class_loss[pos_inds, labels[pos_inds]] *= (1 - reg_loss/2).detach()
             #class_loss[pos_inds] *= (1 - reg_loss/2).unsqueeze(1).detach()
-            reg_loss = reg_loss.sum() / loss_denorm
+            #reg_loss = reg_loss.sum() / loss_denorm
 
-            ctrness_loss = F.binary_cross_entropy_with_logits(
-                instances.ctrness_pred,
-                ctrness_targets,
-                reduction="sum"
-            ) / num_pos_avg
+            piou_loss = F.mse_loss(reg_pos_instances.iou_pred, reg_pos_instances.iou_targets, 
+                reduction="sum") / num_rpos_avg
         else:
             reg_loss = instances.reg_pred.sum() * 0
-            ctrness_loss = instances.ctrness_pred.sum() * 0
+            piou_loss = instances.iou_pred.sum() * 0
         
-        class_loss = class_loss.sum()
+        # embedding loss (cid, rid)
+
+        gather_loss, farther_loss = self.embedding_loss(instances[rpos_inds], instances[cpos_inds], num_objects)
 
         losses = {
-            "loss_fcos_cls": class_loss,
-            "loss_fcos_loc": reg_loss,
-            #"loss_fcos_ctr": ctrness_loss
+            "loss_adcr_cls": class_loss,
+            "loss_adcr_loc": reg_loss,
+            "loss_adcr_piou": piou_loss,
+            #"loss_adcr_gemb": gather_loss * 0.1,
+            #"loss_adcr_femb": farther_loss * 0.1
         }
         extras = {
             "instances": instances,
-            "loss_denorm": loss_denorm,
-            "ratio" : sum(self.ratio) / len(self.ratio)
         }
         return extras, losses
+    
+    def embedding_loss(self, rpos_instances, cpos_instances, num_objects):
+        """
+        1. get mean embedding vector per object
+        2. calculate gather loss + farther loss
+        """
+
+        pred_emb = cat([rpos_instances.rid_pred, cpos_instances.cid_pred], dim=0)
+        target_id = cat([rpos_instances.rid_targets, cpos_instances.cid_targets], dim=0)
+        unique_id = target_id.unique()
+
+        C = self.emb_dim
+        object_proto = torch.zeros(len(unique_id), C, device=pred_emb.device)
+        object_std = torch.zeros(len(unique_id), C, device=pred_emb.device)
+
+        for i in range(len(unique_id)):
+            object_group = pred_emb[target_id == unique_id[i]]
+            object_proto[i] = object_group.mean(dim=0)
+            object_std[i] = object_group.std(dim=0) if object_group.shape[0] > 1 else 0.0
+
+        object_std[object_std < self.in_cb] = 0
+        gather_loss = object_std.mean()
+        object_proto = object_proto.unsqueeze(1).repeat(1, len(unique_id),1)
+        farther_loss = (self.ext_cb - ((object_proto - object_proto.transpose(0,1)).triu() ** 2).sum(dim=2)).mean()
+
+        return gather_loss, farther_loss
+        
 
     def predict_proposals(
-            self, logits_pred, reg_pred, ctrness_pred,
+            self, logits_pred, reg_pred, cid_pred, rid_pred, iou_pred,
             locations, image_sizes, top_feats=None
     ):
         if self.training:

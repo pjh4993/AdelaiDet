@@ -45,7 +45,7 @@ class OneStageDetector(ProposalNetwork):
         if self.training:
             return super().forward(batched_inputs)
         processed_results = super().forward(batched_inputs)
-        processed_results = [{"instances": r["proposals"]} for r in processed_results]
+        processed_results = [{"one_stage_instances": r["proposals"]} for r in processed_results]
         return processed_results
 
 
