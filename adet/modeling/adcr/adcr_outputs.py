@@ -76,7 +76,7 @@ class ADCROutputs(nn.Module):
         self.emb_dim = cfg.MODEL.ADCR.EMB_DIM
 
         self.positive_sample_rate = cfg.MODEL.ADCR.POS_SAMPLE_RATE
-        self.pss_diff = (1 - self.positive_sample_rate) / (cfg.SOLVER.MAX_ITER * get_world_size())
+        self.pss_diff = (1 - self.positive_sample_rate) / (1.5 * cfg.SOLVER.MAX_ITER)
         self.in_cb, self.ext_cb = cfg.MODEL.ADCR.IN_CB, cfg.MODEL.ADCR.EXT_CB
 
         self.RPSR = []
@@ -679,6 +679,7 @@ class ADCROutputs(nn.Module):
         gather_loss = object_std.mean()
         object_proto = object_proto.unsqueeze(1).repeat(1, len(unique_id),1)
         farther_loss = (self.ext_cb - ((object_proto - object_proto.transpose(0,1)).triu() ** 2).sum(dim=2)).mean()
+        farther_loss = (-farther_loss).exp()
 
         return gather_loss, farther_loss
         

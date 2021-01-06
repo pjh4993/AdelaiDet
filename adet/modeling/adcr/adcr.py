@@ -6,6 +6,7 @@ from torch.nn import functional as F
 
 from detectron2.layers import ShapeSpec, NaiveSyncBatchNorm
 from detectron2.modeling.proposal_generator.build import PROPOSAL_GENERATOR_REGISTRY
+from detectron2.utils.events import get_event_storage
 
 from adet.layers import DFConv2d, NaiveGroupNorm
 from adet.utils.comm import compute_locations
@@ -101,14 +102,23 @@ class ADCR(nn.Module):
                         locations, images.image_sizes, top_feats
                     )
 
+
+            PLCS_thr = sum(self.adcr_outputs.PCLS_thr) / len(self.adcr_outputs.PCLS_thr)
+            PIoU_thr = sum(self.adcr_outputs.PIoU_thr) / len(self.adcr_outputs.PIoU_thr)
+            CPSR = sum(self.adcr_outputs.CPSR) / len(self.adcr_outputs.CPSR)
+            RPSR = sum(self.adcr_outputs.RPSR) / len(self.adcr_outputs.RPSR)
+
+            get_event_storage().put_scalar("PLCS_thr", PLCS_thr)
+            get_event_storage().put_scalar("PIoU_thr", PIoU_thr)
+            get_event_storage().put_scalar("CPSR", CPSR)
+            get_event_storage().put_scalar("RPSR", RPSR)
+            get_event_storage().put_scalar("psr_rate", self.adcr_outputs.positive_sample_rate)
+
             self.cnt+=1
             if self.cnt % 20 == 19:
                 logging.getLogger(__name__).info(
                     'CLS_thr: {:4f} IoU_tr: {:4f} CPSR: {:4f} RPSR: {:4f} pss_rate: {:4f}'.format(
-                        sum(self.adcr_outputs.PCLS_thr) / len(self.adcr_outputs.PCLS_thr),
-                        sum(self.adcr_outputs.PIoU_thr) / len(self.adcr_outputs.PIoU_thr),
-                        sum(self.adcr_outputs.CPSR) / len(self.adcr_outputs.CPSR),
-                        sum(self.adcr_outputs.RPSR) / len(self.adcr_outputs.RPSR),
+                        PLCS_thr, PIoU_thr, CPSR, RPSR,
                         self.adcr_outputs.positive_sample_rate
                     )
                 )
