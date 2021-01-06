@@ -79,11 +79,10 @@ class ADCROutputs(nn.Module):
         self.pss_diff = (1 - self.positive_sample_rate) / (1.5 * cfg.SOLVER.MAX_ITER)
         self.in_cb, self.ext_cb = cfg.MODEL.ADCR.IN_CB, cfg.MODEL.ADCR.EXT_CB
 
-        self.RPSR = []
-        self.CPSR = []
-        self.PIoU_thr = []
-        self.PCLS_thr = []
-
+        self.RPSR = 0
+        self.CPSR = 0
+        self.PIoU_thr = 0
+        self.PCLS_thr = 0
 
         # generate sizes of interest
         soi = []
@@ -325,8 +324,6 @@ class ADCROutputs(nn.Module):
         iou_thr = []
         in_boxes = pos_inds.nonzero()
         
-        prev_pos = pos_inds.sum()
-
         for i in range(pre_calc_IoU.shape[1]):
             per_idx = in_boxes[in_boxes[:,1] == i, 0]
             mean = pre_calc_IoU[per_idx, i].mean()
@@ -338,13 +335,16 @@ class ADCROutputs(nn.Module):
 
             if (pre_calc_IoU[:,i] >= iou_thr).sum() == 0:
                 iou_thr = 0.0
+
+            prev_pos = pos_inds[:,i].sum()
+
             pos_inds[:,i]*=(pre_calc_IoU[:,i] >= iou_thr)
-            self.PIoU_thr.append(iou_thr)
+            self.PIoU_thr+=iou_thr
+
+            post_pos = pos_inds[:,i].sum()
+
+            self.RPSR+=(post_pos / (prev_pos + 1e-6))
         
-        post_pos = pos_inds.sum()
-
-        self.RPSR.append(post_pos / prev_pos)
-
         return pos_inds, pre_calc_IoU
 
     def classification_positive_sample_seleciton(self, curr_classes, logits_pred, pos_inds):
@@ -359,7 +359,6 @@ class ADCROutputs(nn.Module):
 
         in_boxes = pos_inds.nonzero()
         
-        prev_pos = pos_inds.sum()
 
         for i in range(pairwise_cls.shape[1]):
             per_idx = in_boxes[in_boxes[:,1] == i, 0]
@@ -371,12 +370,14 @@ class ADCROutputs(nn.Module):
                 cls_thr = 0.0
             if (pairwise_cls[:,i] >= cls_thr).sum() == 0:
                 cls_thr = 0.0
-            pos_inds[:,i]*=(pairwise_cls[:,i] >= cls_thr)
-            self.PCLS_thr.append(cls_thr)
-        
-        post_pos = pos_inds.sum()
 
-        self.CPSR.append(post_pos / prev_pos)
+            prev_pos = pos_inds[:,i].sum()
+            pos_inds[:,i]*=(pairwise_cls[:,i] >= cls_thr)
+            self.PCLS_thr+=cls_thr
+        
+            post_pos = pos_inds[:,i].sum()
+
+            self.CPSR += (post_pos / (prev_pos + 1e-6))
 
         return pos_inds
 
@@ -435,8 +436,10 @@ class ADCROutputs(nn.Module):
                 [logit[im_i].detach().clone().reshape(self.num_classes,-1).t() for logit in logits_pred], 
                 copy.deepcopy(is_in_boxes))
 
-            # !!! from here
             locations_to_gt_area = area[None].repeat(len(locations), 1)
+            # lr_max = reg_targets_per_im[:,:,[0,2]].max(dim=2)[0]
+            # tb_max = reg_targets_per_im[:,:,[1,3]].max(dim=2)[0]
+            # max_reg_targets_per_im = torch.min(lr_max, tb_max)
             max_reg_targets_per_im = reg_targets_per_im.max(dim=2)[0]
             # limit the regression range for each location
             is_cared_in_the_level = \
@@ -474,6 +477,7 @@ class ADCROutputs(nn.Module):
 
             cpos_to_gt_inds[cpos_to_min_area == INF] = -1
             rpos_to_gt_inds[rpos_to_min_area == INF] = -1
+            
 
             labels.append(labels_per_im)
             reg_targets.append(reg_targets_per_im)
@@ -492,7 +496,7 @@ class ADCROutputs(nn.Module):
             #"target_inds": target_inds
         }, num_objects
 
-    def losses(self, logits_pred, reg_pred, cid_pred, rid_pred, iou_pred, locations, gt_instances, top_feats=None):
+    def losses(self, logits_pred, reg_pred, cid_pred, rid_pred, iou_pred, locations, gt_instances, relation_net, top_feats=None):
         """
         Return the losses from a set of ADCR predictions and their associated ground-truth.
 
@@ -501,14 +505,15 @@ class ADCROutputs(nn.Module):
         """
 
         # initialize statistics
-        self.RPSR = []
-        self.CPSR = []
-        self.PIoU_thr = []
-        self.PCLS_thr = []
+        self.RPSR = 0
+        self.CPSR = 0
+        self.PIoU_thr = 0
+        self.PCLS_thr = 0
 
         training_targets, num_objects = self._get_ground_truth(locations, gt_instances, logits_pred, reg_pred)
 
-        self.positive_sample_rate += self.pss_diff
+        if self.positive_sample_rate < 0.5:
+            self.positive_sample_rate += self.pss_diff
 
         # Collect all logits and regression predictions over feature maps
         # and images to arrive at the same shape as the labels and targets
@@ -580,9 +585,9 @@ class ADCROutputs(nn.Module):
                 x.permute(0, 2, 3, 1).reshape(-1, x.size(1)) for x in top_feats
             ], dim=0,)
 
-        return self.adcr_losses(instances, num_objects)
+        return self.adcr_losses(instances, num_objects, relation_net)
 
-    def adcr_losses(self, instances, num_objects):
+    def adcr_losses(self, instances, num_objects, relation_net):
         num_classes = instances.logits_pred.size(1)
         assert num_classes == self.num_classes
 
@@ -642,21 +647,21 @@ class ADCROutputs(nn.Module):
         
         # embedding loss (cid, rid)
 
-        gather_loss, farther_loss = self.embedding_loss(instances[rpos_inds], instances[cpos_inds], num_objects)
+        emb_loss = self.embedding_loss(instances[rpos_inds], instances[cpos_inds], relation_net)
 
         losses = {
             "loss_adcr_cls": class_loss,
             "loss_adcr_loc": reg_loss,
             "loss_adcr_piou": piou_loss,
-            #"loss_adcr_gemb": gather_loss * 0.1,
-            #"loss_adcr_femb": farther_loss * 0.1
+            "loss_adcr_emb": emb_loss,
         }
         extras = {
             "instances": instances,
+            "num_objects": num_objects
         }
         return extras, losses
     
-    def embedding_loss(self, rpos_instances, cpos_instances, num_objects):
+    def embedding_loss(self, rpos_instances, cpos_instances, relation_net):
         """
         1. get mean embedding vector per object
         2. calculate gather loss + farther loss
@@ -664,29 +669,39 @@ class ADCROutputs(nn.Module):
 
         pred_emb = cat([rpos_instances.rid_pred, cpos_instances.cid_pred], dim=0)
         target_id = cat([rpos_instances.rid_targets, cpos_instances.cid_targets], dim=0)
-        unique_id = target_id.unique()
+        unique_id = torch.arange(len(target_id.unique()), device=target_id.device)
+        for l, uid in enumerate(target_id.unique()):
+            target_id[target_id==uid] = unique_id[l]
+
 
         C = self.emb_dim
         object_proto = torch.zeros(len(unique_id), C, device=pred_emb.device)
-        object_std = torch.zeros(len(unique_id), C, device=pred_emb.device)
 
         for i in range(len(unique_id)):
             object_group = pred_emb[target_id == unique_id[i]]
             object_proto[i] = object_group.mean(dim=0)
-            object_std[i] = object_group.std(dim=0) if object_group.shape[0] > 1 else 0.0
-
-        object_std[object_std < self.in_cb] = 0
-        gather_loss = object_std.mean()
-        object_proto = object_proto.unsqueeze(1).repeat(1, len(unique_id),1)
-        farther_loss = (self.ext_cb - ((object_proto - object_proto.transpose(0,1)).triu() ** 2).sum(dim=2)).mean()
-        farther_loss = (-farther_loss).exp()
-
-        return gather_loss, farther_loss
         
+        
+        feature = pred_emb.unsqueeze(1).repeat(1,len(unique_id),1) - object_proto.unsqueeze(0).repeat(len(pred_emb),1,1)
+        logits_pred = relation_net(feature.transpose(1,2)).squeeze(1)
+
+        one_hot_target = torch.zeros_like(logits_pred)
+        one_hot_target[range(len(target_id)), target_id] = 1
+
+        emb_loss = sigmoid_focal_loss_jit(
+            logits_pred,
+            one_hot_target,
+            alpha=self.focal_loss_alpha,
+            gamma=self.focal_loss_gamma,
+            reduction="mean",
+        )
+        return emb_loss
+
+
 
     def predict_proposals(
             self, logits_pred, reg_pred, cid_pred, rid_pred, iou_pred,
-            locations, image_sizes, top_feats=None
+            locations, image_sizes, relation_net, top_feats=None
     ):
         if self.training:
             self.pre_nms_thresh = self.pre_nms_thresh_train

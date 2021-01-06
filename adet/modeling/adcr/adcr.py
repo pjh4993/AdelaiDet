@@ -92,21 +92,21 @@ class ADCR(nn.Module):
         if self.training:
             results, losses = self.adcr_outputs.losses(
                 logits_pred, reg_pred, cid_pred, rid_pred, iou_pred,
-                locations, gt_instances, top_feats
+                locations, gt_instances, self.adcr_head.relation_net, top_feats
             )
             
             if self.yield_proposal:
                 with torch.no_grad():
                     results["proposals"] = self.adcr_outputs.predict_proposals(
                         logits_pred, reg_pred, cid_pred, rid_pred, iou_pred,
-                        locations, images.image_sizes, top_feats
+                        locations, images.image_sizes, self.adcr_head.relation_net, top_feats
                     )
 
 
-            PLCS_thr = sum(self.adcr_outputs.PCLS_thr) / len(self.adcr_outputs.PCLS_thr)
-            PIoU_thr = sum(self.adcr_outputs.PIoU_thr) / len(self.adcr_outputs.PIoU_thr)
-            CPSR = sum(self.adcr_outputs.CPSR) / len(self.adcr_outputs.CPSR)
-            RPSR = sum(self.adcr_outputs.RPSR) / len(self.adcr_outputs.RPSR)
+            PLCS_thr = self.adcr_outputs.PCLS_thr / (results['num_objects'] + 1e-6)
+            PIoU_thr = self.adcr_outputs.PIoU_thr / (results['num_objects'] + 1e-6)
+            CPSR = self.adcr_outputs.CPSR / (results['num_objects'] + 1e-6)
+            RPSR = self.adcr_outputs.RPSR / (results['num_objects'] + 1e-6)
 
             get_event_storage().put_scalar("PLCS_thr", PLCS_thr)
             get_event_storage().put_scalar("PIoU_thr", PIoU_thr)
@@ -115,7 +115,7 @@ class ADCR(nn.Module):
             get_event_storage().put_scalar("psr_rate", self.adcr_outputs.positive_sample_rate)
 
             self.cnt+=1
-            if self.cnt % 20 == 19:
+            if self.cnt % 20 == 0:
                 logging.getLogger(__name__).info(
                     'CLS_thr: {:4f} IoU_tr: {:4f} CPSR: {:4f} RPSR: {:4f} pss_rate: {:4f}'.format(
                         PLCS_thr, PIoU_thr, CPSR, RPSR,
@@ -129,7 +129,7 @@ class ADCR(nn.Module):
         else:
             results = self.adcr_outputs.predict_proposals(
                 logits_pred, reg_pred, cid_pred, rid_pred, iou_pred,
-                locations, images.image_sizes, top_feats
+                locations, images.image_sizes, self.adcr_head.relation_net, top_feats
             )
 
             return results, {}
@@ -137,8 +137,8 @@ class ADCR(nn.Module):
     def _detect_anomaly(self, losses, loss_dict):
         if not torch.isfinite(losses).all():
             raise FloatingPointError(
-                "Loss became infinite or NaN at iteration={}!\nloss_dict = {}".format(
-                    self.iter, loss_dict
+                "Loss became infinite or NaN loss_dict = {}".format(
+                    loss_dict
                 )
             )
 
@@ -230,6 +230,9 @@ class ADCRHead(nn.Module):
             in_channels, 1, kernel_size=3,
             stride=1, padding=1
         )
+        self.relation_net = nn.Conv1d(
+            cfg.MODEL.ADCR.EMB_DIM, 1, kernel_size=1
+        )
 
         if cfg.MODEL.ADCR.USE_SCALE:
             self.scales = nn.ModuleList([Scale(init_value=1.0) for _ in range(self.num_levels)])
@@ -238,7 +241,7 @@ class ADCRHead(nn.Module):
 
         for modules in [
             self.cls_tower, self.bbox_tower, self.emb_tower,
-            self.cls_logits, self.bbox_pred, self.cid_emb, self.rid_emb, self.iou_pred
+            self.cls_logits, self.bbox_pred, self.cid_emb, self.rid_emb, self.iou_pred, self.relation_net
         ]:
             for l in modules.modules():
                 if isinstance(l, nn.Conv2d):
@@ -249,6 +252,7 @@ class ADCRHead(nn.Module):
         prior_prob = cfg.MODEL.ADCR.PRIOR_PROB
         bias_value = -math.log((1 - prior_prob) / prior_prob)
         torch.nn.init.constant_(self.cls_logits.bias, bias_value)
+        torch.nn.init.constant_(self.relation_net.bias, bias_value)
 
     def forward(self, x, top_module=None, yield_bbox_towers=False):
         logits = []
