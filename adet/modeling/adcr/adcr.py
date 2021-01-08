@@ -253,6 +253,7 @@ class ADCRHead(nn.Module):
         bias_value = -math.log((1 - prior_prob) / prior_prob)
         torch.nn.init.constant_(self.cls_logits.bias, bias_value)
         torch.nn.init.constant_(self.relation_net.bias, bias_value)
+        torch.nn.init.constant_(self.iou_pred.bias, bias_value)
 
     def forward(self, x, top_module=None, yield_bbox_towers=False):
         logits = []

@@ -4,11 +4,14 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import copy
+import os
 
 from detectron2.layers import cat
-from detectron2.structures import Instances, Boxes, pairwise_iou
+from detectron2.structures import Instances, Boxes, pairwise_giou
 from detectron2.utils.comm import get_world_size
+from detectron2.modeling import ROIPooler
 from fvcore.nn import sigmoid_focal_loss_jit
+import torch.multiprocessing as mp
 
 from adet.utils.comm import reduce_sum
 from adet.layers import ml_nms, IOULoss
@@ -60,11 +63,13 @@ class ADCROutputs(nn.Module):
         self.center_sample = cfg.MODEL.ADCR.CENTER_SAMPLE
         self.radius = cfg.MODEL.ADCR.POS_RADIUS
         self.pre_nms_thresh_train = cfg.MODEL.ADCR.INFERENCE_TH_TRAIN
+        self.pre_nms_iou_thresh_train = cfg.MODEL.ADCR.IOU_TH_TRAIN
         self.pre_nms_topk_train = cfg.MODEL.ADCR.PRE_NMS_TOPK_TRAIN
         self.post_nms_topk_train = cfg.MODEL.ADCR.POST_NMS_TOPK_TRAIN
         self.loc_loss_func = IOULoss(cfg.MODEL.ADCR.LOC_LOSS_TYPE)
 
         self.pre_nms_thresh_test = cfg.MODEL.ADCR.INFERENCE_TH_TEST
+        self.pre_nms_iou_thresh_test = cfg.MODEL.ADCR.IOU_TH_TEST
         self.pre_nms_topk_test = cfg.MODEL.ADCR.PRE_NMS_TOPK_TEST
         self.post_nms_topk_test = cfg.MODEL.ADCR.POST_NMS_TOPK_TEST
         self.nms_thresh = cfg.MODEL.ADCR.NMS_TH
@@ -78,6 +83,8 @@ class ADCROutputs(nn.Module):
         self.positive_sample_rate = cfg.MODEL.ADCR.POS_SAMPLE_RATE
         self.pss_diff = (1 - self.positive_sample_rate) / (1.5 * cfg.SOLVER.MAX_ITER)
         self.in_cb, self.ext_cb = cfg.MODEL.ADCR.IN_CB, cfg.MODEL.ADCR.EXT_CB
+        self.pooler = ROIPooler(output_size=1, scales=[1/x for x in self.strides], sampling_ratio=0, pooler_type='ROIAlignV2')
+        self.focal_piou = cfg.MODEL.ADCR.FOCAL_PIOU
 
         self.RPSR = 0
         self.CPSR = 0
@@ -246,6 +253,10 @@ class ADCROutputs(nn.Module):
             else:
                 is_in_boxes = reg_targets_per_im.min(dim=2)[0] > 0
 
+            locations_to_gt_area = area[None].repeat(len(locations), 1)
+            # lr_max = reg_targets_per_im[:,:,[0,2]].max(dim=2)[0]
+            # tb_max = reg_targets_per_im[:,:,[1,3]].max(dim=2)[0]
+            # max_reg_targets_per_im = torch.min(lr_max, tb_max)
             max_reg_targets_per_im = reg_targets_per_im.max(dim=2)[0]
             # limit the regression range for each location
             is_cared_in_the_level = \
@@ -258,7 +269,8 @@ class ADCROutputs(nn.Module):
 
             # if there are still more than one objects for a location,
             # we choose the one with minimal area
-            locations_to_min_area, locations_to_gt_inds = locations_to_gt_area.min(dim=1)
+            locations_to_min_area, locations_to_gt_inds = locations_to_gt_area.min(
+                dim=1)
 
             reg_targets_per_im = reg_targets_per_im[range(len(locations)), locations_to_gt_inds]
             target_inds_per_im = locations_to_gt_inds + num_targets
@@ -319,7 +331,7 @@ class ADCROutputs(nn.Module):
         loc_to_crit_box = self.locations_to_crit_box(locations, num_loc_list, xs, ys, 
                                 reg_pred if reg_pred != None else None)
 
-        pre_calc_IoU = pairwise_iou(Boxes(loc_to_crit_box), gt_boxes)
+        pre_calc_IoU = pairwise_giou(Boxes(loc_to_crit_box), gt_boxes)
 
         iou_thr = []
         in_boxes = pos_inds.nonzero()
@@ -437,14 +449,24 @@ class ADCROutputs(nn.Module):
                 copy.deepcopy(is_in_boxes))
 
             locations_to_gt_area = area[None].repeat(len(locations), 1)
-            # lr_max = reg_targets_per_im[:,:,[0,2]].max(dim=2)[0]
-            # tb_max = reg_targets_per_im[:,:,[1,3]].max(dim=2)[0]
-            # max_reg_targets_per_im = torch.min(lr_max, tb_max)
+
+            lr_max = reg_targets_per_im[:,:,[0,2]].max(dim=2)[0]
+            tb_max = reg_targets_per_im[:,:,[1,3]].max(dim=2)[0]
+
+            min_reg_targets_per_im = torch.min(lr_max, tb_max)
             max_reg_targets_per_im = reg_targets_per_im.max(dim=2)[0]
+
             # limit the regression range for each location
+            weird_in_the_level = \
+                (min_reg_targets_per_im >= size_ranges[:, [0]]) & \
+                (min_reg_targets_per_im <= size_ranges[:, [1]])
+
             is_cared_in_the_level = \
                 (max_reg_targets_per_im >= size_ranges[:, [0]]) & \
                 (max_reg_targets_per_im <= size_ranges[:, [1]])
+
+            is_cared_in_the_level |= weird_in_the_level
+
 
             #target_inds_per_im = locations_to_gt_inds + num_targets
 
@@ -470,7 +492,8 @@ class ADCROutputs(nn.Module):
 
             reg_targets_per_im = reg_targets_per_im[range(len(locations)), rpos_to_gt_inds]
             iou_targets_per_im = iou_trg[range(len(locations)), rpos_to_gt_inds]
-            iou_targets_per_im[rpos_to_min_area == INF] = -1
+            iou_targets_per_im[iou_targets_per_im < 1] += 1e-6
+            iou_targets_per_im[rpos_to_min_area == INF] = 0
 
             cpos_to_gt_inds += num_objects
             rpos_to_gt_inds += num_objects
@@ -597,7 +620,7 @@ class ADCROutputs(nn.Module):
         piou = instances.iou_targets.flatten()
 
         cpos_inds = torch.nonzero(labels != num_classes).squeeze(1)
-        rpos_inds = torch.nonzero(piou != -1).squeeze(1)
+        rpos_inds = torch.nonzero(piou != 0).squeeze(1)
 
         num_cpos_local = cpos_inds.numel()
         num_rpos_local = rpos_inds.numel()
@@ -624,8 +647,14 @@ class ADCROutputs(nn.Module):
             reduction="sum",
         ) / num_cpos_avg
 
+        if self.focal_piou:
+            piou_diff = (instances.iou_pred.sigmoid() - instances.iou_targets) ** 2
+            piou_loss = (-self.focal_loss_alpha * (piou_diff) ** self.focal_loss_gamma * (1 - piou_diff).log()).sum() / num_rpos_avg
+        else:
+            piou_loss = F.mse_loss(instances.iou_pred.sigmoid(), instances.iou_targets,
+                               reduction="sum") / num_rpos_avg
         # regression loss
-        
+         
         reg_pos_instances = instances[rpos_inds]
         reg_pos_instances.pos_inds = rpos_inds
 
@@ -639,8 +668,7 @@ class ADCROutputs(nn.Module):
             #class_loss[pos_inds] *= (1 - reg_loss/2).unsqueeze(1).detach()
             #reg_loss = reg_loss.sum() / loss_denorm
 
-            piou_loss = F.mse_loss(reg_pos_instances.iou_pred, reg_pos_instances.iou_targets, 
-                reduction="sum") / num_rpos_avg
+
         else:
             reg_loss = instances.reg_pred.sum() * 0
             piou_loss = instances.iou_pred.sum() * 0
@@ -705,10 +733,12 @@ class ADCROutputs(nn.Module):
     ):
         if self.training:
             self.pre_nms_thresh = self.pre_nms_thresh_train
+            self.pre_nms_iou_thresh = self.pre_nms_iou_thresh_train
             self.pre_nms_topk = self.pre_nms_topk_train
             self.post_nms_topk = self.post_nms_topk_train
         else:
             self.pre_nms_thresh = self.pre_nms_thresh_test
+            self.pre_nms_iou_thresh = self.pre_nms_iou_thresh_test
             self.pre_nms_topk = self.pre_nms_topk_test
             self.post_nms_topk = self.post_nms_topk_test
 
@@ -716,12 +746,9 @@ class ADCROutputs(nn.Module):
 
         bundle = {
             "l": locations, "o": logits_pred,
-            "r": reg_pred, "c": ctrness_pred,
-            "s": self.strides,
+            "r": reg_pred, "pi": iou_pred, "ci": cid_pred, "ri": rid_pred,
+            "s": self.strides, "pooler": self.pooler.level_poolers
         }
-
-        if len(top_feats) > 0:
-            bundle["t"] = top_feats
 
         for i, per_bundle in enumerate(zip(*bundle.values())):
             # get per-level bundle
@@ -731,12 +758,15 @@ class ADCROutputs(nn.Module):
             l = per_bundle["l"]
             o = per_bundle["o"]
             r = per_bundle["r"] * per_bundle["s"]
-            c = per_bundle["c"]
-            t = per_bundle["t"] if "t" in bundle else None
+            s = per_bundle["s"]
+            pi = per_bundle["pi"]
+            ci = per_bundle["ci"]
+            ri = per_bundle["ri"]
+            pooler = per_bundle["pooler"]
 
             sampled_boxes.append(
                 self.forward_for_single_feature_map(
-                    l, o, r, c, image_sizes, t
+                    l, o, r, pi, ci, ri, s, image_sizes, relation_net, pooler
                 )
             )
 
@@ -752,70 +782,49 @@ class ADCROutputs(nn.Module):
         return boxlists
 
     def forward_for_single_feature_map(
-            self, locations, logits_pred, reg_pred,
-            ctrness_pred, image_sizes, top_feat=None
+            self, locations, logits_pred, reg_pred, iou_pred,
+            cid_pred, rid_pred, stride, image_sizes, relation_net, pooler
     ):
         N, C, H, W = logits_pred.shape
 
         # put in the same format as locations
         logits_pred = logits_pred.view(N, C, H, W).permute(0, 2, 3, 1)
-        logits_pred = logits_pred.reshape(N, -1, C).sigmoid()
+        logits_pred = logits_pred.sigmoid()
+        
         box_regression = reg_pred.view(N, 4, H, W).permute(0, 2, 3, 1)
         box_regression = box_regression.reshape(N, -1, 4)
-        ctrness_pred = ctrness_pred.view(N, 1, H, W).permute(0, 2, 3, 1)
-        ctrness_pred = ctrness_pred.reshape(N, -1).sigmoid()
-        if top_feat is not None:
-            top_feat = top_feat.view(N, -1, H, W).permute(0, 2, 3, 1)
-            top_feat = top_feat.reshape(N, H * W, -1)
+        
+        iou_pred = iou_pred.view(N, 1, H, W).permute(0, 2, 3, 1)
+        iou_pred = iou_pred.reshape(N, -1)#.sigmoid()
 
-        # if self.thresh_with_ctr is True, we multiply the classification
-        # scores with centerness scores before applying the threshold.
-        """
-        if self.thresh_with_ctr:
-            logits_pred = logits_pred * ctrness_pred[:, :, None]
-        """
+        cid_pred = cid_pred.view(N, self.emb_dim, H, W).permute(0, 2, 3, 1)
+        cid_pred = cid_pred.reshape(N, -1, self.emb_dim)
 
-        candidate_inds = logits_pred > self.pre_nms_thresh
+        rid_pred = rid_pred.reshape(N, self.emb_dim, H, W).permute(0, 2, 3, 1)
+        rid_pred = rid_pred.reshape(N, -1, self.emb_dim)
+
+        # we first filter detection result with lower than iou_threshold
+        candidate_inds = (iou_pred > self.pre_nms_iou_thresh) * (logits_pred.reshape(N, -1, C).max(dim=2)[0] > self.pre_nms_thresh)
         pre_nms_top_n = candidate_inds.reshape(N, -1).sum(1)
         pre_nms_top_n = pre_nms_top_n.clamp(max=self.pre_nms_topk)
 
-        """
-        if not self.thresh_with_ctr:
-            logits_pred = logits_pred * ctrness_pred[:, :, None]
-        """
-
         results = []
         for i in range(N):
+            # Match box regression and classificatoin
+            # currently use voting system according to covered area of box in here
             per_box_cls = logits_pred[i]
             per_candidate_inds = candidate_inds[i]
-            per_box_cls = per_box_cls[per_candidate_inds]
 
             per_candidate_nonzeros = per_candidate_inds.nonzero()
             per_box_loc = per_candidate_nonzeros[:, 0]
-            per_class = per_candidate_nonzeros[:, 1]
 
             per_box_regression = box_regression[i]
             per_box_regression = per_box_regression[per_box_loc]
 
-            per_centerness = ctrness_pred[i]
-            per_centerness = per_centerness[per_box_loc]
+            per_box_piou = iou_pred[i]
+            per_box_piou = per_box_piou[per_box_loc]
 
             per_locations = locations[per_box_loc]
-            if top_feat is not None:
-                per_top_feat = top_feat[i]
-                per_top_feat = per_top_feat[per_box_loc]
-
-            per_pre_nms_top_n = pre_nms_top_n[i]
-
-            if per_candidate_inds.sum().item() > per_pre_nms_top_n.item():
-                per_box_cls, top_k_indices = \
-                    per_box_cls.topk(per_pre_nms_top_n, sorted=False)
-                per_class = per_class[top_k_indices]
-                per_box_regression = per_box_regression[top_k_indices]
-                per_centerness = per_centerness[top_k_indices]
-                per_locations = per_locations[top_k_indices]
-                if top_feat is not None:
-                    per_top_feat = per_top_feat[top_k_indices]
 
             detections = torch.stack([
                 per_locations[:, 0] - per_box_regression[:, 0],
@@ -824,14 +833,24 @@ class ADCROutputs(nn.Module):
                 per_locations[:, 1] + per_box_regression[:, 3],
             ], dim=1)
 
+            per_box_cls, per_class = self.match_reg_cls(detections, per_box_cls, pooler) 
+
+            per_pre_nms_top_n = pre_nms_top_n[i]
+            if per_candidate_inds.sum().item() > per_pre_nms_top_n.item():
+                # sort prediction 1) iou  / 2) cls score and take top_k
+                per_box_cls, top_k_indices = \
+                    per_box_cls.topk(per_pre_nms_top_n, sorted=False)
+                per_class = per_class[top_k_indices]
+                per_locations = per_locations[top_k_indices]
+                per_box_piou = per_box_piou[top_k_indices]
+                detections = detections[top_k_indices]
+
             boxlist = Instances(image_sizes[i])
             boxlist.pred_boxes = Boxes(detections)
             boxlist.scores = torch.sqrt(per_box_cls)
             boxlist.pred_classes = per_class
             boxlist.locations = per_locations
-            boxlist.centerness = per_centerness
-            if top_feat is not None:
-                boxlist.top_feat = per_top_feat
+            boxlist.centerness = per_box_piou
             results.append(boxlist)
 
         return results
@@ -856,3 +875,12 @@ class ADCROutputs(nn.Module):
                 result = result[keep]
             results.append(result)
         return results
+
+    def match_reg_cls(self, detection, logits_pred, pooler):
+        batch_id = torch.zeros((len(detection),1), device=detection.device)
+        pooled_cls = pooler(logits_pred.transpose(0,2).unsqueeze(0), cat([batch_id, detection], dim=1)).view(len(detection), self.num_classes)
+
+        if len(detection) > 0:
+            return pooled_cls.max(dim=1)
+        else:
+            return torch.zeros((0),device=detection.device), torch.zeros((0),device=detection.device)
