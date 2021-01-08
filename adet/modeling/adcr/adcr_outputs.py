@@ -351,7 +351,7 @@ class ADCROutputs(nn.Module):
             prev_pos = pos_inds[:,i].sum()
 
             pos_inds[:,i]*=(pre_calc_IoU[:,i] >= iou_thr)
-            self.PIoU_thr+=iou_thr
+            self.PIoU_thr+=(iou_thr * 2 -1)
 
             post_pos = pos_inds[:,i].sum()
 
