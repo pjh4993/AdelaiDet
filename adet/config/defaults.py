@@ -77,6 +77,7 @@ _C.MODEL.ADCR.TOP_LEVELS = 2
 _C.MODEL.ADCR.NORM = "GN"  # Support GN or none
 _C.MODEL.ADCR.USE_SCALE = True
 _C.MODEL.ADCR.FOCAL_PIOU = True
+_C.MODEL.ADCR.FOCAL_EMB = True
 
 # Multiply centerness before threshold
 # This will affect the final performance by about 0.05 AP but save some time
@@ -94,7 +95,7 @@ _C.MODEL.ADCR.NUM_CLS_CONVS = 3
 _C.MODEL.ADCR.NUM_BOX_CONVS = 3
 _C.MODEL.ADCR.NUM_EMB_CONVS = 3
 _C.MODEL.ADCR.EMB_DIM = 4
-_C.MODEL.ADCR.POS_SAMPLE_RATE = -1
+_C.MODEL.ADCR.POS_SAMPLE_RATE = -1.0
 _C.MODEL.ADCR.NUM_SHARE_CONVS = 0
 _C.MODEL.ADCR.CENTER_SAMPLE = True
 _C.MODEL.ADCR.POS_RADIUS = 1.5

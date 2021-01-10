@@ -85,11 +85,14 @@ class ADCROutputs(nn.Module):
         self.in_cb, self.ext_cb = cfg.MODEL.ADCR.IN_CB, cfg.MODEL.ADCR.EXT_CB
         self.pooler = ROIPooler(output_size=1, scales=[1/x for x in self.strides], sampling_ratio=0, pooler_type='ROIAlignV2')
         self.focal_piou = cfg.MODEL.ADCR.FOCAL_PIOU
+        self.focal_emb = cfg.MODEL.ADCR.FOCAL_EMB
 
         self.RPSR = 0
         self.CPSR = 0
         self.PIoU_thr = 0
         self.PCLS_thr = 0
+        self.EMB_acc = 0
+        self.PIOU_acc = 0
 
         # generate sizes of interest
         soi = []
@@ -532,6 +535,8 @@ class ADCROutputs(nn.Module):
         self.CPSR = 0
         self.PIoU_thr = 0
         self.PCLS_thr = 0
+        self.EMB_acc = 0
+        self.PIOU_acc = 0
 
         training_targets, num_objects = self._get_ground_truth(locations, gt_instances, logits_pred, reg_pred)
 
@@ -649,10 +654,21 @@ class ADCROutputs(nn.Module):
 
         if self.focal_piou:
             piou_diff = (instances.iou_pred.sigmoid() - instances.iou_targets) ** 2
-            piou_loss = (-self.focal_loss_alpha * (piou_diff) ** self.focal_loss_gamma * (1 - piou_diff).log()).sum() / num_rpos_avg
+            piou_loss = - (1 - piou_diff).log()
+            piou_focal = (piou_diff.shape[0] / num_rpos_avg) * (piou_diff)
+            piou_loss = (piou_focal * piou_loss).mean()
         else:
-            piou_loss = F.mse_loss(instances.iou_pred.sigmoid(), instances.iou_targets,
-                               reduction="sum") / num_rpos_avg
+            piou_mse_loss = F.mse_loss(instances.iou_pred.sigmoid(), instances.iou_targets,
+                                reduction="mean")
+            piou_loss = piou_mse_loss
+
+        piou_diff = (instances.iou_pred.detach().sigmoid() - instances.iou_targets) ** 2
+        for i in range(10):
+            area = (instances.iou_targets < ((i+1)/10)) * (instances.iou_targets >= (i/10))
+            if area.any():
+                self.PIOU_acc += piou_diff[area].mean()
+        self.PIOU_acc /= 10
+        
         # regression loss
          
         reg_pos_instances = instances[rpos_inds]
@@ -681,7 +697,7 @@ class ADCROutputs(nn.Module):
             "loss_adcr_cls": class_loss,
             "loss_adcr_loc": reg_loss,
             "loss_adcr_piou": piou_loss,
-            "loss_adcr_emb": emb_loss,
+            #"loss_adcr_emb": emb_loss,
         }
         extras = {
             "instances": instances,
@@ -710,22 +726,33 @@ class ADCROutputs(nn.Module):
             object_proto[i] = object_group.mean(dim=0)
         
         
-        feature = pred_emb.unsqueeze(1).repeat(1,len(unique_id),1) - object_proto.unsqueeze(0).repeat(len(pred_emb),1,1)
+        feature = cat([pred_emb.unsqueeze(1).repeat(1,len(unique_id),1), object_proto.unsqueeze(0).repeat(len(pred_emb),1,1)], dim=2)
         logits_pred = relation_net(feature.transpose(1,2)).squeeze(1)
 
         one_hot_target = torch.zeros_like(logits_pred)
         one_hot_target[range(len(target_id)), target_id] = 1
 
-        emb_loss = sigmoid_focal_loss_jit(
-            logits_pred,
-            one_hot_target,
-            alpha=self.focal_loss_alpha,
-            gamma=self.focal_loss_gamma,
-            reduction="mean",
-        )
+        if self.focal_emb:
+            emb_focal_loss = sigmoid_focal_loss_jit(
+                logits_pred,
+                one_hot_target,
+                alpha=self.focal_loss_alpha,
+                gamma=self.focal_loss_gamma,
+                reduction="mean",
+            )
+            emb_loss = emb_focal_loss
+        else:
+            emb_ce_loss = F.binary_cross_entropy_with_logits(
+                logits_pred,
+                one_hot_target,
+                reduction="mean"
+            )
+            emb_loss = emb_ce_loss
+        
+        acc = (logits_pred.sigmoid().max(dim=1)[1] == target_id)
+        self.EMB_acc = acc.sum() / len(acc)
+        
         return emb_loss
-
-
 
     def predict_proposals(
             self, logits_pred, reg_pred, cid_pred, rid_pred, iou_pred,
