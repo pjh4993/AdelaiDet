@@ -699,13 +699,14 @@ class ADCROutputs(nn.Module):
         
         # embedding loss (cid, rid)
 
-        emb_loss = self.embedding_loss(instances[rpos_inds], instances[cpos_inds], relation_net)
+        emb_pull_loss, emb_push_loss = self.embedding_loss(instances[rpos_inds], instances[cpos_inds], relation_net)
 
         losses = {
             "loss_adcr_cls": class_loss,
             "loss_adcr_loc": reg_loss,
             "loss_adcr_piou": piou_loss,
-            #"loss_adcr_emb": emb_loss,
+            "loss_adcr_emb_pull": emb_pull_loss,
+            "loss_adcr_emb_push": emb_push_loss,
         }
         extras = {
             "instances": instances,
@@ -726,41 +727,32 @@ class ADCROutputs(nn.Module):
             target_id[target_id==uid] = unique_id[l]
 
 
+        N = len(unique_id)
         C = self.emb_dim
         object_proto = torch.zeros(len(unique_id), C, device=pred_emb.device)
+        pull_loss = []
 
         for i in range(len(unique_id)):
             object_group = pred_emb[target_id == unique_id[i]]
             object_proto[i] = object_group.mean(dim=0)
+            emb_diff = (object_group - object_proto[i]) ** 2
+            pull_loss.append(emb_diff.mean())
         
-        
-        feature = cat([pred_emb.unsqueeze(1).repeat(1,len(unique_id),1), object_proto.unsqueeze(0).repeat(len(pred_emb),1,1)], dim=2)
-        logits_pred = relation_net(feature.transpose(1,2)).squeeze(1)
+        pull_loss = torch.stack(pull_loss).sum() / N
 
-        one_hot_target = torch.zeros_like(logits_pred)
-        one_hot_target[range(len(target_id)), target_id] = 1
+        proto_diff = -(object_proto[None] - object_proto[:,None,:]) ** 2
+        push_loss = proto_diff.triu().exp().sum() / (N ** 2)
 
-        if self.focal_emb:
-            emb_focal_loss = sigmoid_focal_loss_jit(
-                logits_pred,
-                one_hot_target,
-                alpha=self.focal_loss_alpha,
-                gamma=self.focal_loss_gamma,
-                reduction="mean",
-            )
-            emb_loss = emb_focal_loss
-        else:
-            emb_ce_loss = F.binary_cross_entropy_with_logits(
-                logits_pred,
-                one_hot_target,
-                reduction="mean"
-            )
-            emb_loss = emb_ce_loss
-        
-        acc = (logits_pred.sigmoid().max(dim=1)[1] == target_id)
-        self.EMB_acc = acc.sum() / len(acc)
-        
-        return emb_loss
+        test_idx = torch.randperm(len(target_id))[:1000]
+        test_emb = pred_emb.detach()[test_idx]
+        test_target = target_id.detach()[test_idx]
+
+        diff = -((test_emb[None] - test_emb[:,None,:]) ** 2).sum(dim=2)
+        top_idx = torch.topk(diff, 6)[1]
+        pairwise_check = (test_target[top_idx[:,1:]] == test_target[:,None])
+        self.EMB_acc = pairwise_check.sum() / len(pairwise_check)
+
+        return pull_loss, push_loss
 
     def predict_proposals(
             self, logits_pred, reg_pred, cid_pred, rid_pred, iou_pred,
