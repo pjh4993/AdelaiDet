@@ -107,6 +107,8 @@ class ADCR(nn.Module):
             PIoU_thr = self.adcr_outputs.PIoU_thr / (results['num_objects'] + 1e-6)
             CPSR = self.adcr_outputs.CPSR / (results['num_objects'] + 1e-6)
             RPSR = self.adcr_outputs.RPSR / (results['num_objects'] + 1e-6)
+            CPMAX = self.adcr_outputs.CPMAX / (results['num_objects'] + 1e-6)
+            RPMAX = self.adcr_outputs.RPMAX / (results['num_objects'] + 1e-6)
 
             get_event_storage().put_scalar("PLCS_thr", PLCS_thr)
             get_event_storage().put_scalar("PIoU_thr", PIoU_thr)
@@ -119,9 +121,10 @@ class ADCR(nn.Module):
             self.cnt+=1
             if self.cnt % 20 == 0:
                 logging.getLogger(__name__).info(
-                    'CLS_thr: {:4f} IoU_tr: {:4f} CPSR: {:4f} RPSR: {:4f} EMB_acc: {:4f} PIOU_acc: {:4f} pss_rate: {:4f}'.format(
+                    'CLS_thr: {:4f} IoU_tr: {:4f} CPSR: {:4f} RPSR: {:4f} EMB_acc: {:4f} PIOU_acc: {:4f} CPMAX: {:4f} RPMAX {:4f} pss_rate: {:4f}'.format(
                         PLCS_thr, PIoU_thr, CPSR, RPSR, 
                         self.adcr_outputs.EMB_acc, self.adcr_outputs.PIOU_acc,
+                        CPMAX, RPMAX,
                         self.adcr_outputs.positive_sample_rate
                     )
                 )

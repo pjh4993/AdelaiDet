@@ -83,7 +83,7 @@ class ADCROutputs(nn.Module):
         self.positive_sample_rate = cfg.MODEL.ADCR.POS_SAMPLE_RATE
         self.pss_diff = (1 - self.positive_sample_rate) / (1.5 * cfg.SOLVER.MAX_ITER)
         self.in_cb, self.ext_cb = cfg.MODEL.ADCR.IN_CB, cfg.MODEL.ADCR.EXT_CB
-        self.pooler = ROIPooler(output_size=1, scales=[1/x for x in self.strides], sampling_ratio=0, pooler_type='ROIAlignV2')
+        self.pooler = ROIPooler(output_size=1, scales=[1/x for x in self.strides], sampling_ratio=0, pooler_type='ROIPool')
         self.focal_piou = cfg.MODEL.ADCR.FOCAL_PIOU
         self.focal_emb = cfg.MODEL.ADCR.FOCAL_EMB
 
@@ -93,6 +93,8 @@ class ADCROutputs(nn.Module):
         self.PCLS_thr = 0
         self.EMB_acc = 0
         self.PIOU_acc = 0
+        self.RPMAX = 0
+        self.CPMAX = 0
 
         # generate sizes of interest
         soi = []
@@ -343,6 +345,7 @@ class ADCROutputs(nn.Module):
             per_idx = in_boxes[in_boxes[:,1] == i, 0]
             mean = pre_calc_IoU[per_idx, i].mean()
             std = pre_calc_IoU[per_idx, i].std()
+            max = pre_calc_IoU[per_idx, i].sort()[0][-len(per_idx)//100:].mean()
             if len(per_idx) > 1:
                 iou_thr = mean + std * self.positive_sample_rate
             else:
@@ -359,6 +362,7 @@ class ADCROutputs(nn.Module):
             post_pos = pos_inds[:,i].sum()
 
             self.RPSR+=(post_pos / (prev_pos + 1e-6))
+            self.RPMAX+=max
         
         return pos_inds, pre_calc_IoU
 
@@ -379,6 +383,7 @@ class ADCROutputs(nn.Module):
             per_idx = in_boxes[in_boxes[:,1] == i, 0]
             mean = pairwise_cls[per_idx, i].mean()
             std = pairwise_cls[per_idx, i].std()
+            max = pairwise_cls[per_idx, i].sort()[0][-len(per_idx)//100:].mean()
             if len(per_idx) > 1:
                 cls_thr = mean + std * self.positive_sample_rate
             else:
@@ -393,6 +398,7 @@ class ADCROutputs(nn.Module):
             post_pos = pos_inds[:,i].sum()
 
             self.CPSR += (post_pos / (prev_pos + 1e-6))
+            self.CPMAX += max
 
         return pos_inds
 
@@ -537,6 +543,8 @@ class ADCROutputs(nn.Module):
         self.PCLS_thr = 0
         self.EMB_acc = 0
         self.PIOU_acc = 0
+        self.CPMAX = 0
+        self.RPMAX = 0
 
         training_targets, num_objects = self._get_ground_truth(locations, gt_instances, logits_pred, reg_pred)
 
@@ -822,7 +830,7 @@ class ADCROutputs(nn.Module):
         box_regression = box_regression.reshape(N, -1, 4)
         
         iou_pred = iou_pred.view(N, 1, H, W).permute(0, 2, 3, 1)
-        iou_pred = iou_pred.reshape(N, -1)#.sigmoid()
+        iou_pred = iou_pred.sigmoid().reshape(N, -1)
 
         cid_pred = cid_pred.view(N, self.emb_dim, H, W).permute(0, 2, 3, 1)
         cid_pred = cid_pred.reshape(N, -1, self.emb_dim)
@@ -831,7 +839,9 @@ class ADCROutputs(nn.Module):
         rid_pred = rid_pred.reshape(N, -1, self.emb_dim)
 
         # we first filter detection result with lower than iou_threshold
-        candidate_inds = (iou_pred > self.pre_nms_iou_thresh) * (logits_pred.reshape(N, -1, C).max(dim=2)[0] > self.pre_nms_thresh)
+        logits_pred[logits_pred < 0.6] = 0
+        iou_pred[iou_pred < 0.6] = 0
+        candidate_inds = (iou_pred > self.pre_nms_iou_thresh)
         pre_nms_top_n = candidate_inds.reshape(N, -1).sum(1)
         pre_nms_top_n = pre_nms_top_n.clamp(max=self.pre_nms_topk)
 
