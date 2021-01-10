@@ -107,18 +107,24 @@ class ADCR(nn.Module):
             PIoU_thr = self.adcr_outputs.PIoU_thr / (results['num_objects'] + 1e-6)
             CPSR = self.adcr_outputs.CPSR / (results['num_objects'] + 1e-6)
             RPSR = self.adcr_outputs.RPSR / (results['num_objects'] + 1e-6)
+            CPMAX = self.adcr_outputs.CPMAX / (results['num_objects'] + 1e-6)
+            RPMAX = self.adcr_outputs.RPMAX / (results['num_objects'] + 1e-6)
 
             get_event_storage().put_scalar("PLCS_thr", PLCS_thr)
             get_event_storage().put_scalar("PIoU_thr", PIoU_thr)
             get_event_storage().put_scalar("CPSR", CPSR)
             get_event_storage().put_scalar("RPSR", RPSR)
+            get_event_storage().put_scalar("EMB_acc", self.adcr_outputs.EMB_acc)
+            get_event_storage().put_scalar("EMB_acc", self.adcr_outputs.PIOU_acc)
             get_event_storage().put_scalar("psr_rate", self.adcr_outputs.positive_sample_rate)
 
             self.cnt+=1
             if self.cnt % 20 == 0:
                 logging.getLogger(__name__).info(
-                    'CLS_thr: {:4f} IoU_tr: {:4f} CPSR: {:4f} RPSR: {:4f} pss_rate: {:4f}'.format(
-                        PLCS_thr, PIoU_thr, CPSR, RPSR,
+                    'CLS_thr: {:4f} IoU_tr: {:4f} CPSR: {:4f} RPSR: {:4f} EMB_acc: {:4f} PIOU_acc: {:4f} CPMAX: {:4f} RPMAX {:4f} pss_rate: {:4f}'.format(
+                        PLCS_thr, PIoU_thr, CPSR, RPSR, 
+                        self.adcr_outputs.EMB_acc, self.adcr_outputs.PIOU_acc,
+                        CPMAX, RPMAX,
                         self.adcr_outputs.positive_sample_rate
                     )
                 )
@@ -231,7 +237,7 @@ class ADCRHead(nn.Module):
             stride=1, padding=1
         )
         self.relation_net = nn.Conv1d(
-            cfg.MODEL.ADCR.EMB_DIM, 1, kernel_size=1
+            cfg.MODEL.ADCR.EMB_DIM * 2, 1, kernel_size=1
         )
 
         if cfg.MODEL.ADCR.USE_SCALE:

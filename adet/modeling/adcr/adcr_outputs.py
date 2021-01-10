@@ -83,13 +83,18 @@ class ADCROutputs(nn.Module):
         self.positive_sample_rate = cfg.MODEL.ADCR.POS_SAMPLE_RATE
         self.pss_diff = (1 - self.positive_sample_rate) / (1.5 * cfg.SOLVER.MAX_ITER)
         self.in_cb, self.ext_cb = cfg.MODEL.ADCR.IN_CB, cfg.MODEL.ADCR.EXT_CB
-        self.pooler = ROIPooler(output_size=1, scales=[1/x for x in self.strides], sampling_ratio=0, pooler_type='ROIAlignV2')
+        self.pooler = ROIPooler(output_size=1, scales=[1/x for x in self.strides], sampling_ratio=0, pooler_type='ROIPool')
         self.focal_piou = cfg.MODEL.ADCR.FOCAL_PIOU
+        self.focal_emb = cfg.MODEL.ADCR.FOCAL_EMB
 
         self.RPSR = 0
         self.CPSR = 0
         self.PIoU_thr = 0
         self.PCLS_thr = 0
+        self.EMB_acc = 0
+        self.PIOU_acc = 0
+        self.RPMAX = 0
+        self.CPMAX = 0
 
         # generate sizes of interest
         soi = []
@@ -340,6 +345,7 @@ class ADCROutputs(nn.Module):
             per_idx = in_boxes[in_boxes[:,1] == i, 0]
             mean = pre_calc_IoU[per_idx, i].mean()
             std = pre_calc_IoU[per_idx, i].std()
+            max = pre_calc_IoU[per_idx, i].sort()[0][-len(per_idx)//100:].mean()
             if len(per_idx) > 1:
                 iou_thr = mean + std * self.positive_sample_rate
             else:
@@ -356,6 +362,7 @@ class ADCROutputs(nn.Module):
             post_pos = pos_inds[:,i].sum()
 
             self.RPSR+=(post_pos / (prev_pos + 1e-6))
+            self.RPMAX+=max
         
         return pos_inds, pre_calc_IoU
 
@@ -376,6 +383,7 @@ class ADCROutputs(nn.Module):
             per_idx = in_boxes[in_boxes[:,1] == i, 0]
             mean = pairwise_cls[per_idx, i].mean()
             std = pairwise_cls[per_idx, i].std()
+            max = pairwise_cls[per_idx, i].sort()[0][-len(per_idx)//100:].mean()
             if len(per_idx) > 1:
                 cls_thr = mean + std * self.positive_sample_rate
             else:
@@ -390,6 +398,7 @@ class ADCROutputs(nn.Module):
             post_pos = pos_inds[:,i].sum()
 
             self.CPSR += (post_pos / (prev_pos + 1e-6))
+            self.CPMAX += max
 
         return pos_inds
 
@@ -532,6 +541,10 @@ class ADCROutputs(nn.Module):
         self.CPSR = 0
         self.PIoU_thr = 0
         self.PCLS_thr = 0
+        self.EMB_acc = 0
+        self.PIOU_acc = 0
+        self.CPMAX = 0
+        self.RPMAX = 0
 
         training_targets, num_objects = self._get_ground_truth(locations, gt_instances, logits_pred, reg_pred)
 
@@ -649,10 +662,21 @@ class ADCROutputs(nn.Module):
 
         if self.focal_piou:
             piou_diff = (instances.iou_pred.sigmoid() - instances.iou_targets) ** 2
-            piou_loss = (-self.focal_loss_alpha * (piou_diff) ** self.focal_loss_gamma * (1 - piou_diff).log()).sum() / num_rpos_avg
+            piou_loss = - (1 - piou_diff).log()
+            piou_focal = (piou_diff.shape[0] / num_rpos_avg) * (piou_diff)
+            piou_loss = (piou_focal * piou_loss).mean()
         else:
-            piou_loss = F.mse_loss(instances.iou_pred.sigmoid(), instances.iou_targets,
-                               reduction="sum") / num_rpos_avg
+            piou_mse_loss = F.mse_loss(instances.iou_pred.sigmoid(), instances.iou_targets,
+                                reduction="mean")
+            piou_loss = piou_mse_loss
+
+        piou_diff = (instances.iou_pred.detach().sigmoid() - instances.iou_targets) ** 2
+        for i in range(10):
+            area = (instances.iou_targets < ((i+1)/10)) * (instances.iou_targets >= (i/10))
+            if area.any():
+                self.PIOU_acc += piou_diff[area].mean()
+        self.PIOU_acc /= 10
+        
         # regression loss
          
         reg_pos_instances = instances[rpos_inds]
@@ -675,13 +699,14 @@ class ADCROutputs(nn.Module):
         
         # embedding loss (cid, rid)
 
-        emb_loss = self.embedding_loss(instances[rpos_inds], instances[cpos_inds], relation_net)
+        emb_pull_loss, emb_push_loss = self.embedding_loss(instances[rpos_inds], instances[cpos_inds], relation_net)
 
         losses = {
             "loss_adcr_cls": class_loss,
             "loss_adcr_loc": reg_loss,
             "loss_adcr_piou": piou_loss,
-            "loss_adcr_emb": emb_loss,
+            "loss_adcr_emb_pull": emb_pull_loss,
+            "loss_adcr_emb_push": emb_push_loss,
         }
         extras = {
             "instances": instances,
@@ -702,30 +727,32 @@ class ADCROutputs(nn.Module):
             target_id[target_id==uid] = unique_id[l]
 
 
+        N = len(unique_id)
         C = self.emb_dim
         object_proto = torch.zeros(len(unique_id), C, device=pred_emb.device)
+        pull_loss = []
 
         for i in range(len(unique_id)):
             object_group = pred_emb[target_id == unique_id[i]]
             object_proto[i] = object_group.mean(dim=0)
+            emb_diff = (object_group - object_proto[i]) ** 2
+            pull_loss.append(emb_diff.mean())
         
-        
-        feature = pred_emb.unsqueeze(1).repeat(1,len(unique_id),1) - object_proto.unsqueeze(0).repeat(len(pred_emb),1,1)
-        logits_pred = relation_net(feature.transpose(1,2)).squeeze(1)
+        pull_loss = torch.stack(pull_loss).sum() / N
 
-        one_hot_target = torch.zeros_like(logits_pred)
-        one_hot_target[range(len(target_id)), target_id] = 1
+        proto_diff = -(object_proto[None] - object_proto[:,None,:]) ** 2
+        push_loss = proto_diff.triu().exp().sum() / (N ** 2)
 
-        emb_loss = sigmoid_focal_loss_jit(
-            logits_pred,
-            one_hot_target,
-            alpha=self.focal_loss_alpha,
-            gamma=self.focal_loss_gamma,
-            reduction="mean",
-        )
-        return emb_loss
+        test_idx = torch.randperm(len(target_id))[:1000]
+        test_emb = pred_emb.detach()[test_idx]
+        test_target = target_id.detach()[test_idx]
 
+        diff = -((test_emb[None] - test_emb[:,None,:]) ** 2).sum(dim=2)
+        top_idx = torch.topk(diff, 6)[1]
+        pairwise_check = (test_target[top_idx[:,1:]] == test_target[:,None])
+        self.EMB_acc = pairwise_check.sum() / len(pairwise_check)
 
+        return pull_loss, push_loss
 
     def predict_proposals(
             self, logits_pred, reg_pred, cid_pred, rid_pred, iou_pred,
@@ -795,7 +822,7 @@ class ADCROutputs(nn.Module):
         box_regression = box_regression.reshape(N, -1, 4)
         
         iou_pred = iou_pred.view(N, 1, H, W).permute(0, 2, 3, 1)
-        iou_pred = iou_pred.reshape(N, -1)#.sigmoid()
+        iou_pred = iou_pred.sigmoid().reshape(N, -1)
 
         cid_pred = cid_pred.view(N, self.emb_dim, H, W).permute(0, 2, 3, 1)
         cid_pred = cid_pred.reshape(N, -1, self.emb_dim)
@@ -804,7 +831,9 @@ class ADCROutputs(nn.Module):
         rid_pred = rid_pred.reshape(N, -1, self.emb_dim)
 
         # we first filter detection result with lower than iou_threshold
-        candidate_inds = (iou_pred > self.pre_nms_iou_thresh) * (logits_pred.reshape(N, -1, C).max(dim=2)[0] > self.pre_nms_thresh)
+        logits_pred[logits_pred < 0.6] = 0
+        iou_pred[iou_pred < 0.6] = 0
+        candidate_inds = (iou_pred > self.pre_nms_iou_thresh)
         pre_nms_top_n = candidate_inds.reshape(N, -1).sum(1)
         pre_nms_top_n = pre_nms_top_n.clamp(max=self.pre_nms_topk)
 
