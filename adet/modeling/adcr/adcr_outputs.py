@@ -36,8 +36,8 @@ Naming convention:
     reg_targets: refers to the 4-d (left, top, right, bottom) distances that parameterize the ground-truth box.
 
     logits_pred: predicted classification scores in [-inf, +inf];
-    
-    reg_pred: the predicted (left, top, right, bottom), corresponding to reg_targets 
+
+    reg_pred: the predicted (left, top, right, bottom), corresponding to reg_targets
 
     ctrness_pred: predicted centerness scores
 
@@ -306,7 +306,7 @@ class ADCROutputs(nn.Module):
             curr_xs = xs[st:en]
             curr_ys = ys[st:en]
             if reg_pred == None:
-                anchor = cat([(curr_xs - loc_to_anchor_size / 2).unsqueeze(1), (curr_ys - loc_to_anchor_size / 2).unsqueeze(1), 
+                anchor = cat([(curr_xs - loc_to_anchor_size / 2).unsqueeze(1), (curr_ys - loc_to_anchor_size / 2).unsqueeze(1),
                                 (curr_xs + loc_to_anchor_size / 2).unsqueeze(1) , (curr_ys + loc_to_anchor_size / 2).unsqueeze(1)], dim=1)
                 loc_to_crit_box.append(anchor)
             else:
@@ -314,7 +314,7 @@ class ADCROutputs(nn.Module):
                 pred_box = cat([(curr_xs - curr_reg_pred[:,0]).unsqueeze(1), (curr_ys - curr_reg_pred[:,1]).unsqueeze(1),
                                    (curr_xs + curr_reg_pred[:,2]).unsqueeze(1), (curr_ys + curr_reg_pred[:,3]).unsqueeze(1)],dim=1)
                 loc_to_crit_box.append(pred_box)
-                
+
             st = en
 
         loc_to_crit_box = torch.cat(loc_to_crit_box, dim=0)
@@ -325,7 +325,7 @@ class ADCROutputs(nn.Module):
         """
         Regression positive sample selection part
 
-        1. Calculate IOU between prediction box and given GT instances            
+        1. Calculate IOU between prediction box and given GT instances
         2. Get mean and std of IOU per GT instances
         3. set positive index as ( is_in_box && IOU > mean + std * labmd_sched )
         """
@@ -333,14 +333,14 @@ class ADCROutputs(nn.Module):
         xs, ys = locations[:, 0], locations[:, 1]
 
         #calculate anchors based on locations. size of anchor is based on stride
-        loc_to_crit_box = self.locations_to_crit_box(locations, num_loc_list, xs, ys, 
+        loc_to_crit_box = self.locations_to_crit_box(locations, num_loc_list, xs, ys,
                                 reg_pred if reg_pred != None else None)
 
         pre_calc_IoU = pairwise_giou(Boxes(loc_to_crit_box), gt_boxes)
 
         iou_thr = []
         in_boxes = pos_inds.nonzero()
-        
+
         for i in range(pre_calc_IoU.shape[1]):
             per_idx = in_boxes[in_boxes[:,1] == i, 0]
             mean = pre_calc_IoU[per_idx, i].mean()
@@ -363,7 +363,7 @@ class ADCROutputs(nn.Module):
 
             self.RPSR+=(post_pos / (prev_pos + 1e-6))
             self.RPMAX+=max
-        
+
         return pos_inds, pre_calc_IoU
 
     def classification_positive_sample_seleciton(self, curr_classes, logits_pred, pos_inds):
@@ -377,7 +377,7 @@ class ADCROutputs(nn.Module):
         pairwise_cls = cat(logits_pred, dim=0).sigmoid().reshape(-1, self.num_classes)[:,curr_classes]
 
         in_boxes = pos_inds.nonzero()
-        
+
 
         for i in range(pairwise_cls.shape[1]):
             per_idx = in_boxes[in_boxes[:,1] == i, 0]
@@ -394,7 +394,7 @@ class ADCROutputs(nn.Module):
             prev_pos = pos_inds[:,i].sum()
             pos_inds[:,i]*=(pairwise_cls[:,i] >= cls_thr)
             self.PCLS_thr+=cls_thr
-        
+
             post_pos = pos_inds[:,i].sum()
 
             self.CPSR += (post_pos / (prev_pos + 1e-6))
@@ -449,12 +449,12 @@ class ADCROutputs(nn.Module):
             else:
                 is_in_boxes = reg_targets_per_im.min(dim=2)[0] > 0
 
-            rpos_inds, iou_trg = self.regression_positive_sample_seleciton(locations, num_loc_list, 
-                [reg[im_i].detach().clone() for reg in reg_pred], 
+            rpos_inds, iou_trg = self.regression_positive_sample_seleciton(locations, num_loc_list,
+                [reg[im_i].detach().clone() for reg in reg_pred],
                 targets_per_im.gt_boxes, copy.deepcopy(is_in_boxes))
 
             cpos_inds = self.classification_positive_sample_seleciton(targets_per_im.gt_classes,
-                [logit[im_i].detach().clone().reshape(self.num_classes,-1).t() for logit in logits_pred], 
+                [logit[im_i].detach().clone().reshape(self.num_classes,-1).t() for logit in logits_pred],
                 copy.deepcopy(is_in_boxes))
 
             locations_to_gt_area = area[None].repeat(len(locations), 1)
@@ -491,9 +491,9 @@ class ADCROutputs(nn.Module):
 
                 return locations_to_min_area, locations_to_gt_inds
 
-            cpos_to_min_area, cpos_to_gt_inds = solve_multiple_target(copy.deepcopy(locations_to_gt_area), 
+            cpos_to_min_area, cpos_to_gt_inds = solve_multiple_target(copy.deepcopy(locations_to_gt_area),
                     is_cared_in_the_level, cpos_inds)
-            rpos_to_min_area, rpos_to_gt_inds = solve_multiple_target(copy.deepcopy(locations_to_gt_area), 
+            rpos_to_min_area, rpos_to_gt_inds = solve_multiple_target(copy.deepcopy(locations_to_gt_area),
                     is_cared_in_the_level, rpos_inds)
 
             labels_per_im = labels_per_im[cpos_to_gt_inds]
@@ -509,7 +509,7 @@ class ADCROutputs(nn.Module):
 
             cpos_to_gt_inds[cpos_to_min_area == INF] = -1
             rpos_to_gt_inds[rpos_to_min_area == INF] = -1
-            
+
 
             labels.append(labels_per_im)
             reg_targets.append(reg_targets_per_im)
@@ -546,6 +546,7 @@ class ADCROutputs(nn.Module):
         self.CPMAX = 0
         self.RPMAX = 0
 
+        num_loc_list = [len(loc) for loc in locations]
         training_targets, num_objects = self._get_ground_truth(locations, gt_instances, logits_pred, reg_pred)
 
         if self.positive_sample_rate < 0.5:
@@ -621,9 +622,9 @@ class ADCROutputs(nn.Module):
                 x.permute(0, 2, 3, 1).reshape(-1, x.size(1)) for x in top_feats
             ], dim=0,)
 
-        return self.adcr_losses(instances, num_objects, relation_net)
+        return self.adcr_losses(instances, num_objects, num_loc_list)
 
-    def adcr_losses(self, instances, num_objects, relation_net):
+    def adcr_losses(self, instances, num_objects, num_loc_list):
         num_classes = instances.logits_pred.size(1)
         assert num_classes == self.num_classes
 
@@ -676,9 +677,9 @@ class ADCROutputs(nn.Module):
             if area.any():
                 self.PIOU_acc += piou_diff[area].mean()
         self.PIOU_acc /= 10
-        
+
         # regression loss
-         
+
         reg_pos_instances = instances[rpos_inds]
         reg_pos_instances.pos_inds = rpos_inds
 
@@ -696,10 +697,10 @@ class ADCROutputs(nn.Module):
         else:
             reg_loss = instances.reg_pred.sum() * 0
             piou_loss = instances.iou_pred.sum() * 0
-        
+
         # embedding loss (cid, rid)
 
-        emb_pull_loss, emb_push_loss = self.embedding_loss(instances[rpos_inds], instances[cpos_inds], relation_net)
+        emb_pull_loss, emb_push_loss = self.embedding_loss(instances, num_loc_list, rpos_inds, cpos_inds)
 
         losses = {
             "loss_adcr_cls": class_loss,
@@ -713,45 +714,70 @@ class ADCROutputs(nn.Module):
             "num_objects": num_objects
         }
         return extras, losses
-    
-    def embedding_loss(self, rpos_instances, cpos_instances, relation_net):
+
+    def embedding_loss(self, instances, num_loc_list, rpos_inds, cpos_inds):
         """
         1. get mean embedding vector per object
         2. calculate gather loss + farther loss
         """
 
-        pred_emb = cat([rpos_instances.rid_pred, cpos_instances.cid_pred], dim=0)
-        target_id = cat([rpos_instances.rid_targets, cpos_instances.cid_targets], dim=0)
-        unique_id = torch.arange(len(target_id.unique()), device=target_id.device)
-        for l, uid in enumerate(target_id.unique()):
-            target_id[target_id==uid] = unique_id[l]
+        batch_size = len(instances) // sum(num_loc_list)
+        st = 0
+        pull_loss_whole = []
+        push_loss_whole = []
+
+        #print(num_loc_list, rpos_inds.max(), cpos_inds.max(), sum(num_loc_list) * batch_size)
+        for num_per_level in num_loc_list:
+            en = st + num_per_level * batch_size
+            rpos_instances = instances[rpos_inds[(rpos_inds >= st) * (rpos_inds < en)]]
+            cpos_instances = instances[cpos_inds[(cpos_inds >= st) * (cpos_inds < en)]]
+            pred_emb = cat([rpos_instances.rid_pred, cpos_instances.cid_pred], dim=0)
+            #print(st, num_per_level * batch_size, len(pred_emb))
+
+            st = en
+            if len(pred_emb) == 0:
+                continue
+            target_id = cat([rpos_instances.rid_targets, cpos_instances.cid_targets], dim=0)
+            unique_id = torch.arange(len(target_id.unique()), device=target_id.device)
+            for l, uid in enumerate(target_id.unique()):
+                target_id[target_id==uid] = unique_id[l]
 
 
-        N = len(unique_id)
-        C = self.emb_dim
-        object_proto = torch.zeros(len(unique_id), C, device=pred_emb.device)
-        pull_loss = []
+            N = len(unique_id)
+            C = self.emb_dim
+            object_proto = torch.zeros(len(unique_id), C, device=pred_emb.device)
+            pull_loss = []
 
-        for i in range(len(unique_id)):
-            object_group = pred_emb[target_id == unique_id[i]]
-            object_proto[i] = object_group.mean(dim=0)
-            emb_diff = (object_group - object_proto[i]) ** 2
-            pull_loss.append(emb_diff.mean())
-        
-        pull_loss = torch.stack(pull_loss).sum() / N
+            for i in range(len(unique_id)):
+                object_group = pred_emb[target_id == unique_id[i]]
+                object_proto[i] = object_group.mean(dim=0)
+                emb_diff = (object_group - object_proto[i]) ** 2
+                pull_loss.append(emb_diff.mean())
 
-        proto_diff = -(object_proto[None] - object_proto[:,None,:]) ** 2
-        push_loss = proto_diff.triu().exp().sum() / (N ** 2)
+            pull_loss = torch.stack(pull_loss).sum() / N
 
-        test_idx = torch.randperm(len(target_id))[:1000]
-        test_emb = pred_emb.detach()[test_idx]
-        test_target = target_id.detach()[test_idx]
+            proto_diff = -(object_proto[None] - object_proto[:,None,:]) ** 2
+            push_loss = proto_diff.triu().exp().sum() / (N ** 2)
 
-        diff = -((test_emb[None] - test_emb[:,None,:]) ** 2).sum(dim=2)
-        top_idx = torch.topk(diff, 6)[1]
-        pairwise_check = (test_target[top_idx[:,1:]] == test_target[:,None])
-        self.EMB_acc = pairwise_check.sum() / len(pairwise_check)
+            """
+            test_idx = torch.randperm(len(target_id))[:1000]
+            test_emb = pred_emb.detach()[test_idx]
+            test_target = target_id.detach()[test_idx]
 
+            diff = -((test_emb[None] - test_emb[:,None,:]) ** 2).sum(dim=2)
+            top_idx = torch.topk(diff, 6)[1]
+            pairwise_check = (test_target[top_idx[:,1:]] == test_target[:,None])
+            self.EMB_acc += pairwise_check.sum() / len(pairwise_check)
+            """
+
+            pull_loss_whole.append(pull_loss)
+            push_loss_whole.append(push_loss)
+
+        self.EMB_acc /= 5
+
+        pull_loss = torch.stack(pull_loss_whole).mean()
+        push_loss = torch.stack(push_loss_whole).mean()
+        pull_loss *= (1 - push_loss.detach()) * 0.1
         return pull_loss, push_loss
 
     def predict_proposals(
@@ -817,10 +843,10 @@ class ADCROutputs(nn.Module):
         # put in the same format as locations
         logits_pred = logits_pred.view(N, C, H, W).permute(0, 2, 3, 1)
         logits_pred = logits_pred.sigmoid()
-        
+
         box_regression = reg_pred.view(N, 4, H, W).permute(0, 2, 3, 1)
         box_regression = box_regression.reshape(N, -1, 4)
-        
+
         iou_pred = iou_pred.view(N, 1, H, W).permute(0, 2, 3, 1)
         iou_pred = iou_pred.sigmoid().reshape(N, -1)
 
@@ -862,7 +888,7 @@ class ADCROutputs(nn.Module):
                 per_locations[:, 1] + per_box_regression[:, 3],
             ], dim=1)
 
-            per_box_cls, per_class = self.match_reg_cls(detections, per_box_cls, pooler) 
+            per_box_cls, per_class = self.match_reg_cls(detections, per_box_cls, pooler)
 
             per_pre_nms_top_n = pre_nms_top_n[i]
             if per_candidate_inds.sum().item() > per_pre_nms_top_n.item():
