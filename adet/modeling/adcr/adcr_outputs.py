@@ -725,6 +725,7 @@ class ADCROutputs(nn.Module):
         st = 0
         pull_loss_whole = []
         push_loss_whole = []
+        glob_push_loss_whole = []
 
         #print(num_loc_list, rpos_inds.max(), cpos_inds.max(), sum(num_loc_list) * batch_size)
         for num_per_level in num_loc_list:
@@ -755,30 +756,31 @@ class ADCROutputs(nn.Module):
                 pull_loss.append(emb_diff.mean())
 
             pull_loss = torch.stack(pull_loss).sum() / N
+            global_mean = object_proto.mean()
+            glob_push_loss = (-((object_proto - global_mean) ** 2).mean()).exp()
+            
+            push_loss = (-((object_proto[None] - object_proto[:,None,:]) ** 2).triu().mean()).exp()
 
-            proto_diff = -(object_proto[None] - object_proto[:,None,:]) ** 2
-            push_loss = proto_diff.triu().exp().sum() / (N ** 2)
-
-            """
             test_idx = torch.randperm(len(target_id))[:1000]
             test_emb = pred_emb.detach()[test_idx]
             test_target = target_id.detach()[test_idx]
 
             diff = -((test_emb[None] - test_emb[:,None,:]) ** 2).sum(dim=2)
-            top_idx = torch.topk(diff, 6)[1]
+            top_idx = torch.topk(diff, min(6, len(diff)))[1]
             pairwise_check = (test_target[top_idx[:,1:]] == test_target[:,None])
-            self.EMB_acc += pairwise_check.sum() / len(pairwise_check)
-            """
+            self.EMB_acc += pairwise_check.sum() / len(pairwise_check.flatten())
 
             pull_loss_whole.append(pull_loss)
-            push_loss_whole.append(push_loss)
+            push_loss_whole.append(push_loss + glob_push_loss)
+            glob_push_loss_whole.append(glob_push_loss)
 
         self.EMB_acc /= 5
 
         pull_loss = torch.stack(pull_loss_whole).mean()
         push_loss = torch.stack(push_loss_whole).mean()
         pull_loss *= (1 - push_loss.detach()) * 0.1
-        return pull_loss, push_loss
+        glob_loss = torch.stack(glob_push_loss_whole).mean()
+        return pull_loss, push_loss + glob_loss
 
     def predict_proposals(
             self, logits_pred, reg_pred, cid_pred, rid_pred, iou_pred,
