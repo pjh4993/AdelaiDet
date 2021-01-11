@@ -92,7 +92,7 @@ class ADCROutputs(nn.Module):
         self.PIoU_thr = 0
         self.PCLS_thr = 0
         self.EMB_acc = 0
-        self.PIOU_acc = 0
+        self.PIOU_acc = []
         self.RPMAX = 0
         self.CPMAX = 0
 
@@ -542,7 +542,7 @@ class ADCROutputs(nn.Module):
         self.PIoU_thr = 0
         self.PCLS_thr = 0
         self.EMB_acc = 0
-        self.PIOU_acc = 0
+        self.PIOU_acc = []
         self.CPMAX = 0
         self.RPMAX = 0
 
@@ -616,6 +616,23 @@ class ADCROutputs(nn.Module):
             x.permute(0, 2, 3, 1).reshape(-1, self.emb_dim) for x in rid_pred
         ], dim=0,)
 
+        """
+        log = {}
+        log["logits"] = [
+            x[0].detach() for x in logits_pred
+        ]
+        log["iou_pred"] = [
+            x[0].detach() for x in iou_pred
+        ]
+
+        log["labels"] = [
+            x[:num].detach().reshape(logits.shape[1:]).unsqueeze(0) for x, num, logits in zip(training_targets["labels"], num_loc_list, log["logits"])
+        ]
+        log["iou_target"] = [
+            x[:num].detach().reshape(piou.shape) for x, num, piou in zip(training_targets["iou_targets"], num_loc_list, log["iou_pred"])
+        ]
+        """
+
         if len(top_feats) > 0:
             instances.top_feats = cat([
                 # Reshape: (N, -1, Hi, Wi) -> (N*Hi*Wi, -1)
@@ -663,20 +680,35 @@ class ADCROutputs(nn.Module):
 
         if self.focal_piou:
             piou_diff = (instances.iou_pred.sigmoid() - instances.iou_targets) ** 2
-            piou_loss = - (1 - piou_diff).log()
-            piou_focal = (piou_diff.shape[0] / num_rpos_avg) * (piou_diff)
-            piou_loss = (piou_focal * piou_loss).mean()
+            piou_log_loss = - (1 - piou_diff).log()
+            piou_focal = 3 * (piou_diff)
+
+            st = 0
+            en = 0.5
+            piou_loss = []
+            for i in range(6):
+                area = (instances.iou_targets >= st) * (instances.iou_targets < en)
+                if area.sum() == 0:
+                    continue
+                piou_loss.append((piou_focal[area] * piou_log_loss[area]).mean())
+                st = en
+                en += 0.1
+
+            piou_loss = torch.stack(piou_loss)
+            assert piou_loss.isfinite().all()
+            piou_loss = piou_loss.sum()
         else:
             piou_mse_loss = F.mse_loss(instances.iou_pred.sigmoid(), instances.iou_targets,
                                 reduction="mean")
             piou_loss = piou_mse_loss
 
         piou_diff = (instances.iou_pred.detach().sigmoid() - instances.iou_targets) ** 2
-        for i in range(10):
-            area = (instances.iou_targets < ((i+1)/10)) * (instances.iou_targets >= (i/10))
+        for i in range(5):
+            area = ((instances.iou_targets.detach() * 2 -1) < ((i+1)/5)) * ((instances.iou_targets * 2 - 1) >= (i/5))
             if area.any():
-                self.PIOU_acc += piou_diff[area].mean()
-        self.PIOU_acc /= 10
+                self.PIOU_acc.append(piou_diff[area].mean())
+        area = ((instances.iou_targets.detach() * 2 - 1) < 0)
+        self.PIOU_acc.insert(0, piou_diff[area].mean())
 
         # regression loss
 
@@ -711,7 +743,8 @@ class ADCROutputs(nn.Module):
         }
         extras = {
             "instances": instances,
-            "num_objects": num_objects
+            "num_objects": num_objects,
+            #"log": log
         }
         return extras, losses
 
@@ -859,8 +892,8 @@ class ADCROutputs(nn.Module):
         rid_pred = rid_pred.reshape(N, -1, self.emb_dim)
 
         # we first filter detection result with lower than iou_threshold
-        logits_pred[logits_pred < 0.6] = 0
-        iou_pred[iou_pred < 0.6] = 0
+        logits_pred[logits_pred < 0.5] = 0
+        iou_pred[iou_pred < 0.5] = 0
         candidate_inds = (iou_pred > self.pre_nms_iou_thresh)
         pre_nms_top_n = candidate_inds.reshape(N, -1).sum(1)
         pre_nms_top_n = pre_nms_top_n.clamp(max=self.pre_nms_topk)
