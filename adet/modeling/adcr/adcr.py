@@ -94,7 +94,7 @@ class ADCR(nn.Module):
                 logits_pred, reg_pred, cid_pred, rid_pred, iou_pred,
                 locations, gt_instances, self.adcr_head.relation_net, top_feats
             )
-            
+
             if self.yield_proposal:
                 with torch.no_grad():
                     results["proposals"] = self.adcr_outputs.predict_proposals(
@@ -115,18 +115,22 @@ class ADCR(nn.Module):
             get_event_storage().put_scalar("CPSR", CPSR)
             get_event_storage().put_scalar("RPSR", RPSR)
             get_event_storage().put_scalar("EMB_acc", self.adcr_outputs.EMB_acc)
-            get_event_storage().put_scalar("EMB_acc", self.adcr_outputs.PIOU_acc)
+            get_event_storage().put_scalar("PIOU_acc", sum(self.adcr_outputs.PIOU_acc))
             get_event_storage().put_scalar("psr_rate", self.adcr_outputs.positive_sample_rate)
 
             self.cnt+=1
             if self.cnt % 20 == 0:
                 logging.getLogger(__name__).info(
-                    'CLS_thr: {:4f} IoU_tr: {:4f} CPSR: {:4f} RPSR: {:4f} EMB_acc: {:4f} PIOU_acc: {:4f} CPMAX: {:4f} RPMAX {:4f} pss_rate: {:4f}'.format(
-                        PLCS_thr, PIoU_thr, CPSR, RPSR, 
-                        self.adcr_outputs.EMB_acc, self.adcr_outputs.PIOU_acc,
+                    'CLS_thr: {:4f} IoU_tr: {:4f} CPSR: {:4f} RPSR: {:4f} EMB_acc: {:4f} CPMAX: {:4f} RPMAX {:4f} pss_rate: {:4f}'.format(
+                        PLCS_thr, PIoU_thr, CPSR, RPSR,
+                        self.adcr_outputs.EMB_acc,
                         CPMAX, RPMAX,
                         self.adcr_outputs.positive_sample_rate
                     )
+                )
+                self.adcr_outputs.PIOU_acc = [x.sqrt().item() for x in self.adcr_outputs.PIOU_acc]
+                logging.getLogger(__name__).info(
+                    "PIOU_acc: " + ', '.join(['%.4f']*len(self.adcr_outputs.PIOU_acc)) % tuple(self.adcr_outputs.PIOU_acc)
                 )
 
             self._detect_anomaly(sum(list(losses.values())), losses)
@@ -247,11 +251,19 @@ class ADCRHead(nn.Module):
 
         for modules in [
             self.cls_tower, self.bbox_tower, self.emb_tower,
-            self.cls_logits, self.bbox_pred, self.cid_emb, self.rid_emb, self.iou_pred, self.relation_net
+            self.cls_logits, self.bbox_pred, self.iou_pred, self.relation_net
         ]:
             for l in modules.modules():
                 if isinstance(l, nn.Conv2d):
                     torch.nn.init.normal_(l.weight, std=0.01)
+                    torch.nn.init.constant_(l.bias, 0)
+
+        for modules in [
+            self.cid_emb, self.rid_emb,
+        ]:
+            for l in modules.modules():
+                if isinstance(l, nn.Conv2d):
+                    torch.nn.init.normal_(l.weight, std=0.1)
                     torch.nn.init.constant_(l.bias, 0)
 
         # initialize the bias for focal loss
