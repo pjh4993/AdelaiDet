@@ -7,7 +7,7 @@ import copy
 import os
 
 from detectron2.layers import cat
-from detectron2.structures import Instances, Boxes, pairwise_giou
+from detectron2.structures import Instances, Boxes, pairwise_iou, pairwise_giou
 from detectron2.utils.comm import get_world_size
 from detectron2.modeling import ROIPooler
 from fvcore.nn import sigmoid_focal_loss_jit
@@ -336,35 +336,35 @@ class ADCROutputs(nn.Module):
         loc_to_crit_box = self.locations_to_crit_box(locations, num_loc_list, xs, ys,
                                 reg_pred if reg_pred != None else None)
 
-        pre_calc_IoU = pairwise_giou(Boxes(loc_to_crit_box), gt_boxes)
+        pre_calc_gIoU = pairwise_giou(Boxes(loc_to_crit_box), gt_boxes)
 
         iou_thr = []
         in_boxes = pos_inds.nonzero()
 
-        for i in range(pre_calc_IoU.shape[1]):
+        for i in range(pre_calc_gIoU.shape[1]):
             per_idx = in_boxes[in_boxes[:,1] == i, 0]
-            mean = pre_calc_IoU[per_idx, i].mean()
-            std = pre_calc_IoU[per_idx, i].std()
-            max = pre_calc_IoU[per_idx, i].sort()[0][-len(per_idx)//100:].mean()
+            mean = pre_calc_gIoU[per_idx, i].mean()
+            std = pre_calc_gIoU[per_idx, i].std()
+            max = pre_calc_gIoU[per_idx, i].sort()[0][-len(per_idx)//100:].mean()
             if len(per_idx) > 1:
                 iou_thr = mean + std * self.positive_sample_rate
             else:
                 iou_thr = 0.0
 
-            if (pre_calc_IoU[:,i] >= iou_thr).sum() == 0:
+            if (pre_calc_gIoU[:,i] >= iou_thr).sum() == 0:
                 iou_thr = 0.0
 
             prev_pos = pos_inds[:,i].sum()
 
-            pos_inds[:,i]*=(pre_calc_IoU[:,i] >= iou_thr)
-            self.PIoU_thr+=(iou_thr * 2 -1)
+            pos_inds[:,i]*=(pre_calc_gIoU[:,i] >= iou_thr)
+            self.PIoU_thr+=(2*iou_thr-1)
 
             post_pos = pos_inds[:,i].sum()
 
             self.RPSR+=(post_pos / (prev_pos + 1e-6))
             self.RPMAX+=max
 
-        return pos_inds, pre_calc_IoU
+        return pos_inds, pre_calc_gIoU
 
     def classification_positive_sample_seleciton(self, curr_classes, logits_pred, pos_inds):
         """
@@ -683,6 +683,7 @@ class ADCROutputs(nn.Module):
             piou_log_loss = - (1 - piou_diff).log()
             piou_focal = 3 * (piou_diff)
 
+            """
             st = 0
             en = 0.5
             piou_loss = []
@@ -695,20 +696,25 @@ class ADCROutputs(nn.Module):
                 en += 0.1
 
             piou_loss = torch.stack(piou_loss)
+            assert len(piou_loss) > 0
             assert piou_loss.isfinite().all()
             piou_loss = piou_loss.sum()
+            """
+            piou_loss = (piou_log_loss * piou_focal).mean()
         else:
             piou_mse_loss = F.mse_loss(instances.iou_pred.sigmoid(), instances.iou_targets,
                                 reduction="mean")
             piou_loss = piou_mse_loss
 
         piou_diff = (instances.iou_pred.detach().sigmoid() - instances.iou_targets) ** 2
-        for i in range(5):
-            area = ((instances.iou_targets.detach() * 2 -1) < ((i+1)/5)) * ((instances.iou_targets * 2 - 1) >= (i/5))
+        st = 0
+        en = 0.5
+        for i in range(6):
+            area = (instances.iou_targets >= st) * (instances.iou_targets < en)
             if area.any():
                 self.PIOU_acc.append(piou_diff[area].mean())
-        area = ((instances.iou_targets.detach() * 2 - 1) < 0)
-        self.PIOU_acc.insert(0, piou_diff[area].mean())
+            st = en
+            en += 0.1
 
         # regression loss
 
@@ -724,8 +730,6 @@ class ADCROutputs(nn.Module):
             #class_loss[pos_inds, labels[pos_inds]] *= (1 - reg_loss/2).detach()
             #class_loss[pos_inds] *= (1 - reg_loss/2).unsqueeze(1).detach()
             #reg_loss = reg_loss.sum() / loss_denorm
-
-
         else:
             reg_loss = instances.reg_pred.sum() * 0
             piou_loss = instances.iou_pred.sum() * 0
