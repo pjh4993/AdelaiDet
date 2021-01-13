@@ -81,7 +81,7 @@ class ADCROutputs(nn.Module):
         self.emb_dim = cfg.MODEL.ADCR.EMB_DIM
 
         self.positive_sample_rate = cfg.MODEL.ADCR.POS_SAMPLE_RATE
-        self.pss_diff = (1 - self.positive_sample_rate) / (1.5 * cfg.SOLVER.MAX_ITER)
+        self.pss_diff = (0.5 - self.positive_sample_rate) / (0.5 * cfg.SOLVER.MAX_ITER)
         self.in_cb, self.ext_cb = cfg.MODEL.ADCR.IN_CB, cfg.MODEL.ADCR.EXT_CB
         self.pooler = ROIPooler(output_size=1, scales=[1/x for x in self.strides], sampling_ratio=0, pooler_type='ROIPool')
         self.focal_piou = cfg.MODEL.ADCR.FOCAL_PIOU
@@ -681,7 +681,7 @@ class ADCROutputs(nn.Module):
         if self.focal_piou:
             piou_diff = (instances.iou_pred.sigmoid() - instances.iou_targets) ** 2
             piou_log_loss = - (1 - piou_diff).log()
-            piou_focal = 3 * (piou_diff ** 0.5)
+            piou_focal = 2 * (piou_diff ** 0.5)
 
             """
             st = 0
