@@ -92,7 +92,7 @@ class ADCROutputs(nn.Module):
         self.PIoU_thr = 0
         self.PCLS_thr = 0
         self.EMB_acc = 0
-        self.PIOU_acc = []
+        self.PIOU_acc = {}
         self.RPMAX = 0
         self.CPMAX = 0
 
@@ -542,7 +542,7 @@ class ADCROutputs(nn.Module):
         self.PIoU_thr = 0
         self.PCLS_thr = 0
         self.EMB_acc = 0
-        self.PIOU_acc = []
+        self.PIOU_acc = {}
         self.CPMAX = 0
         self.RPMAX = 0
 
@@ -681,7 +681,7 @@ class ADCROutputs(nn.Module):
         if self.focal_piou:
             piou_diff = (instances.iou_pred.sigmoid() - instances.iou_targets) ** 2
             piou_log_loss = - (1 - piou_diff).log()
-            piou_focal = 3 * (piou_diff)
+            piou_focal = 3 * (piou_diff ** 0.5)
 
             """
             st = 0
@@ -700,7 +700,7 @@ class ADCROutputs(nn.Module):
             assert piou_loss.isfinite().all()
             piou_loss = piou_loss.sum()
             """
-            piou_loss = (piou_log_loss * piou_focal).mean()
+            piou_loss = (piou_log_loss * piou_focal).sum() / num_rpos_avg
         else:
             piou_mse_loss = F.mse_loss(instances.iou_pred.sigmoid(), instances.iou_targets,
                                 reduction="mean")
@@ -712,7 +712,7 @@ class ADCROutputs(nn.Module):
         for i in range(6):
             area = (instances.iou_targets >= st) * (instances.iou_targets < en)
             if area.any():
-                self.PIOU_acc.append(piou_diff[area].mean())
+                self.PIOU_acc[(round(st,1), round(en,1))] = round(piou_diff[area].mean().sqrt().item(), 2)
             st = en
             en += 0.1
 

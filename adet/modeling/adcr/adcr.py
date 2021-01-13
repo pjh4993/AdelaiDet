@@ -115,7 +115,7 @@ class ADCR(nn.Module):
             get_event_storage().put_scalar("CPSR", CPSR)
             get_event_storage().put_scalar("RPSR", RPSR)
             get_event_storage().put_scalar("EMB_acc", self.adcr_outputs.EMB_acc)
-            get_event_storage().put_scalar("PIOU_acc", sum(self.adcr_outputs.PIOU_acc))
+            get_event_storage().put_scalar("PIOU_acc", sum(list(self.adcr_outputs.PIOU_acc.values())))
             get_event_storage().put_scalar("psr_rate", self.adcr_outputs.positive_sample_rate)
 
             self.cnt+=1
@@ -128,9 +128,8 @@ class ADCR(nn.Module):
                         self.adcr_outputs.positive_sample_rate
                     )
                 )
-                self.adcr_outputs.PIOU_acc = [x.sqrt().item() for x in self.adcr_outputs.PIOU_acc]
                 logging.getLogger(__name__).info(
-                    "PIOU_acc: " + ', '.join(['%.4f']*len(self.adcr_outputs.PIOU_acc)) % tuple(self.adcr_outputs.PIOU_acc)
+                    "PIOU_acc: " + str(self.adcr_outputs.PIOU_acc)
                 )
 
             self._detect_anomaly(sum(list(losses.values())), losses)
