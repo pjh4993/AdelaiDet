@@ -336,7 +336,7 @@ class ADCROutputs(nn.Module):
         loc_to_crit_box = self.locations_to_crit_box(locations, num_loc_list, xs, ys,
                                 reg_pred if reg_pred != None else None)
 
-        pre_calc_gIoU = pairwise_giou(Boxes(loc_to_crit_box), gt_boxes)
+        pre_calc_gIoU = pairwise_iou(Boxes(loc_to_crit_box), gt_boxes)
 
         iou_thr = []
         in_boxes = pos_inds.nonzero()
@@ -357,7 +357,8 @@ class ADCROutputs(nn.Module):
             prev_pos = pos_inds[:,i].sum()
 
             pos_inds[:,i]*=(pre_calc_gIoU[:,i] >= iou_thr)
-            self.PIoU_thr+=(2*iou_thr-1)
+            #self.PIoU_thr+=(2*iou_thr-1)
+            self.PIoU_thr+=(iou_thr)
 
             post_pos = pos_inds[:,i].sum()
 
@@ -681,7 +682,7 @@ class ADCROutputs(nn.Module):
         if self.focal_piou:
             piou_diff = (instances.iou_pred.sigmoid() - instances.iou_targets) ** 2
             piou_log_loss = - (1 - piou_diff).log()
-            piou_focal = 2 * (piou_diff ** 0.5)
+            piou_focal = 10 * (piou_diff)
 
             """
             st = 0
@@ -742,8 +743,8 @@ class ADCROutputs(nn.Module):
             "loss_adcr_cls": class_loss,
             "loss_adcr_loc": reg_loss,
             "loss_adcr_piou": piou_loss,
-            "loss_adcr_emb_pull": emb_pull_loss,
-            "loss_adcr_emb_push": emb_push_loss,
+            #"loss_adcr_emb_pull": emb_pull_loss,
+            #"loss_adcr_emb_push": emb_push_loss,
         }
         extras = {
             "instances": instances,
