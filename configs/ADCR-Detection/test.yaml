@@ -8,7 +8,7 @@ MODEL:
     CENTER_SAMPLE: False
     FOCAL_EMB: False
     EMB_DIM: 1
-    POS_SAMPLE_RATE: -0.9
+    POS_SAMPLE_RATE: -0.6
 INPUT:
   MIN_SIZE_TRAIN: (800,)
 OUTPUT_DIR: "output/adcr/R_50_1x"

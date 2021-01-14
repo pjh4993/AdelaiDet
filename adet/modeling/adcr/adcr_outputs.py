@@ -80,8 +80,6 @@ class ADCROutputs(nn.Module):
         self.tss = cfg.MODEL.ADCR.TSS
         self.emb_dim = cfg.MODEL.ADCR.EMB_DIM
 
-        self.positive_sample_rate = cfg.MODEL.ADCR.POS_SAMPLE_RATE
-        self.pss_diff = (0.5 - self.positive_sample_rate) / (0.5 * cfg.SOLVER.MAX_ITER)
         self.in_cb, self.ext_cb = cfg.MODEL.ADCR.IN_CB, cfg.MODEL.ADCR.EXT_CB
         self.pooler = ROIPooler(output_size=1, scales=[1/x for x in self.strides], sampling_ratio=0, pooler_type='ROIPool')
         self.focal_piou = cfg.MODEL.ADCR.FOCAL_PIOU
@@ -363,7 +361,8 @@ class ADCROutputs(nn.Module):
             post_pos = pos_inds[:,i].sum()
 
             self.RPSR+=(post_pos / (prev_pos + 1e-6))
-            self.RPMAX+=max
+            if max.isfinite():
+                self.RPMAX+=max
 
         return pos_inds, pre_calc_gIoU
 
@@ -399,7 +398,8 @@ class ADCROutputs(nn.Module):
             post_pos = pos_inds[:,i].sum()
 
             self.CPSR += (post_pos / (prev_pos + 1e-6))
-            self.CPMAX += max
+            if max.isfinite():
+                self.CPMAX += max
 
         return pos_inds
 
@@ -550,9 +550,6 @@ class ADCROutputs(nn.Module):
         num_loc_list = [len(loc) for loc in locations]
         training_targets, num_objects = self._get_ground_truth(locations, gt_instances, logits_pred, reg_pred)
 
-        if self.positive_sample_rate < 0.5:
-            self.positive_sample_rate += self.pss_diff
-
         # Collect all logits and regression predictions over feature maps
         # and images to arrive at the same shape as the labels and targets
         # The final ordering is L, N, H, W from slowest to fastest axis.
@@ -681,44 +678,29 @@ class ADCROutputs(nn.Module):
 
         if self.focal_piou:
             piou_diff = (instances.iou_pred.sigmoid() - instances.iou_targets) ** 2
-            piou_log_loss = - (1 - piou_diff).log()
-            piou_focal = 10 * (piou_diff)
-
-            """
-            st = 0
-            en = 0.5
-            piou_loss = []
-            for i in range(6):
-                area = (instances.iou_targets >= st) * (instances.iou_targets < en)
-                if area.sum() == 0:
-                    continue
-                piou_loss.append((piou_focal[area] * piou_log_loss[area]).mean())
-                st = en
-                en += 0.1
-
-            piou_loss = torch.stack(piou_loss)
-            assert len(piou_loss) > 0
-            assert piou_loss.isfinite().all()
-            piou_loss = piou_loss.sum()
-            """
+            piou_log_loss = (1 - piou_diff)
+            piou_log_loss[piou_log_loss == 0] += 1e-6
+            piou_log_loss = - piou_log_loss.log()
+            piou_focal = 3 * (piou_diff ** 0.75)
             piou_loss = (piou_log_loss * piou_focal).sum() / num_rpos_avg
         else:
             piou_mse_loss = F.mse_loss(instances.iou_pred.sigmoid(), instances.iou_targets,
-                                reduction="mean")
+                                reduction="sum") / num_rpos_avg
             piou_loss = piou_mse_loss
 
-        piou_diff = (instances.iou_pred.detach().sigmoid() - instances.iou_targets) ** 2
+        piou_diff = (instances.iou_pred.sigmoid() - instances.iou_targets) ** 2
         st = 0
-        en = 0.5
-        for i in range(6):
+        en = 0.1
+        for i in range(9):
             area = (instances.iou_targets >= st) * (instances.iou_targets < en)
             if area.any():
-                self.PIOU_acc[(round(st,1), round(en,1))] = round(piou_diff[area].mean().sqrt().item(), 2)
+                self.PIOU_acc[(round(st,1), round(en,1))] = [round(piou_diff[area].sqrt().mean().item(), 2),
+                    round(area.sum().item()/(1+(instances.iou_targets >= 0.5).sum().item()), 4),
+                    area.sum().item()
+                ]
             st = en
             en += 0.1
-
         # regression loss
-
         reg_pos_instances = instances[rpos_inds]
         reg_pos_instances.pos_inds = rpos_inds
 
@@ -737,14 +719,16 @@ class ADCROutputs(nn.Module):
 
         # embedding loss (cid, rid)
 
-        emb_pull_loss, emb_push_loss = self.embedding_loss(instances, num_loc_list, rpos_inds, cpos_inds)
+        #emb_pull_loss, emb_push_loss = self.embedding_loss(instances, num_loc_list, rpos_inds, cpos_inds)
 
+        reg_loss_portion = 1 - reg_loss.detach().clone()
         losses = {
             "loss_adcr_cls": class_loss,
             "loss_adcr_loc": reg_loss,
+            #"loss_adcr_piou": piou_loss * reg_loss_portion,
             "loss_adcr_piou": piou_loss,
-            #"loss_adcr_emb_pull": emb_pull_loss,
-            #"loss_adcr_emb_push": emb_push_loss,
+            #"loss_adcr_emb_pull": emb_pull_loss * reg_loss_portion,
+            #"loss_adcr_emb_push": emb_push_loss * reg_loss_portion,
         }
         extras = {
             "instances": instances,
@@ -794,6 +778,7 @@ class ADCROutputs(nn.Module):
                 pull_loss.append(emb_diff.mean())
 
             pull_loss = torch.stack(pull_loss).sum() / N
+
             global_mean = object_proto.mean()
             glob_push_loss = (-((object_proto - global_mean) ** 2).mean()).exp()
             
@@ -809,16 +794,20 @@ class ADCROutputs(nn.Module):
             self.EMB_acc += pairwise_check.sum() / len(pairwise_check.flatten())
 
             pull_loss_whole.append(pull_loss)
-            push_loss_whole.append(push_loss + glob_push_loss)
+            push_loss_whole.append(push_loss)
             glob_push_loss_whole.append(glob_push_loss)
 
         self.EMB_acc /= 5
 
         pull_loss = torch.stack(pull_loss_whole).mean()
         push_loss = torch.stack(push_loss_whole).mean()
-        pull_loss *= (1 - push_loss.detach()) * 0.1
+        pull_loss *= (1 - push_loss.detach())
         glob_loss = torch.stack(glob_push_loss_whole).mean()
-        return pull_loss, push_loss + glob_loss
+
+        #pos_ratio = (len(rpos_inds) + len(cpos_inds)) / len(instances)
+        pos_ratio = 1
+
+        return pull_loss * pos_ratio, (push_loss + glob_loss)*pos_ratio
 
     def predict_proposals(
             self, logits_pred, reg_pred, cid_pred, rid_pred, iou_pred,

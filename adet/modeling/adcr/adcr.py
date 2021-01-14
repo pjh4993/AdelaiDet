@@ -52,6 +52,10 @@ class ADCR(nn.Module):
         self.fpn_strides = cfg.MODEL.ADCR.FPN_STRIDES
         self.yield_proposal = cfg.MODEL.ADCR.YIELD_PROPOSAL
 
+        self.positive_sample_rate = nn.parameter.Parameter(
+            torch.tensor([cfg.MODEL.ADCR.POS_SAMPLE_RATE]), requires_grad=False)
+        self.max_iter = cfg.SOLVER.MAX_ITER
+
         self.adcr_head = ADCRHead(cfg, [input_shape[f] for f in self.in_features])
         self.in_channels_to_top_module = self.adcr_head.in_channels_to_top_module
 
@@ -89,6 +93,11 @@ class ADCR(nn.Module):
                 f: b for f, b in zip(self.in_features, bbox_towers)
             }
 
+
+        pss_diff = (0.5 - self.positive_sample_rate) / (0.5 * self.max_iter)
+        self.positive_sample_rate += pss_diff
+        self.adcr_outputs.positive_sample_rate = self.positive_sample_rate.item()
+
         if self.training:
             results, losses = self.adcr_outputs.losses(
                 logits_pred, reg_pred, cid_pred, rid_pred, iou_pred,
@@ -115,7 +124,10 @@ class ADCR(nn.Module):
             get_event_storage().put_scalar("CPSR", CPSR)
             get_event_storage().put_scalar("RPSR", RPSR)
             get_event_storage().put_scalar("EMB_acc", self.adcr_outputs.EMB_acc)
-            get_event_storage().put_scalar("PIOU_acc", sum(list(self.adcr_outputs.PIOU_acc.values())))
+            for k, v in self.adcr_outputs.PIOU_acc.items():
+                get_event_storage().put_scalar("PIOU_acc" + str(k), v[0])
+                get_event_storage().put_scalar("PIOU_por" + str(k), v[1])
+                get_event_storage().put_scalar("PIOU_abs" + str(k), v[2])
             get_event_storage().put_scalar("psr_rate", self.adcr_outputs.positive_sample_rate)
 
             self.cnt+=1
@@ -128,8 +140,9 @@ class ADCR(nn.Module):
                         self.adcr_outputs.positive_sample_rate
                     )
                 )
+                acc_pp = ['{}: {}'.format(k,v) for k, v in self.adcr_outputs.PIOU_acc.items()]
                 logging.getLogger(__name__).info(
-                    "PIOU_acc: " + str(self.adcr_outputs.PIOU_acc)
+                    "PIOU_acc: " + '\n' + '\n'.join(acc_pp)
                 )
 
             self._detect_anomaly(sum(list(losses.values())), losses)
