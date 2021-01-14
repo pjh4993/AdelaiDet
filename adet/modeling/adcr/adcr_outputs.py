@@ -691,7 +691,7 @@ class ADCROutputs(nn.Module):
         piou_diff = (instances.iou_pred.sigmoid() - instances.iou_targets) ** 2
         st = 0
         en = 0.1
-        for i in range(9):
+        for i in range(10):
             area = (instances.iou_targets >= st) * (instances.iou_targets < en)
             if area.any():
                 self.PIOU_acc[(round(st,1), round(en,1))] = [round(piou_diff[area].sqrt().mean().item(), 2),
