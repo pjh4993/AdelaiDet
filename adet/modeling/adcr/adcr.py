@@ -96,7 +96,8 @@ class ADCR(nn.Module):
 
         pss_diff = (0.5 - self.positive_sample_rate) / (0.5 * self.max_iter)
         self.positive_sample_rate += pss_diff
-        self.adcr_outputs.positive_sample_rate = self.positive_sample_rate.item()
+        #self.adcr_outputs.positive_sample_rate = self.positive_sample_rate.item()
+        self.adcr_outputs.positive_sample_rate = -0.9
 
         if self.training:
             results, losses = self.adcr_outputs.losses(
@@ -149,9 +150,10 @@ class ADCR(nn.Module):
 
             return results, losses
         else:
+            training_target, _ = self.adcr_outputs._get_ground_truth(locations,gt_instances, logits_pred, reg_pred)
             results = self.adcr_outputs.predict_proposals(
                 logits_pred, reg_pred, iou_pred,
-                locations, images.image_sizes, top_feats
+                locations, images.image_sizes, training_target, top_feats
             )
 
             return results, {}

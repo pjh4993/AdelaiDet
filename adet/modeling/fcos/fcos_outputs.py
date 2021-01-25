@@ -224,7 +224,7 @@ class FCOSOutputs(nn.Module):
             b = bboxes[:, 3][None] - ys[:, None]
             reg_targets_per_im = torch.stack([l, t, r, b], dim=2)
 
-            if self.center_sample:
+            if True:
                 if targets_per_im.has("gt_bitmasks_full"):
                     bitmasks = targets_per_im.gt_bitmasks_full
                 else:
@@ -518,7 +518,7 @@ class FCOSOutputs(nn.Module):
 
     def predict_proposals(
             self, logits_pred, reg_pred, ctrness_pred,
-            locations, image_sizes, top_feats=None
+            locations, image_sizes, true_label, top_feats=None
     ):
         if self.training:
             self.pre_nms_thresh = self.pre_nms_thresh_train
@@ -534,7 +534,7 @@ class FCOSOutputs(nn.Module):
         bundle = {
             "l": locations, "o": logits_pred,
             "r": reg_pred, "c": ctrness_pred,
-            "s": self.strides,
+            "s": self.strides, "tl": true_label,
         }
 
         if len(top_feats) > 0:
@@ -549,11 +549,12 @@ class FCOSOutputs(nn.Module):
             o = per_bundle["o"]
             r = per_bundle["r"] * per_bundle["s"]
             c = per_bundle["c"]
+            tl = per_bundle["tl"]
             t = per_bundle["t"] if "t" in bundle else None
 
             sampled_boxes.append(
                 self.forward_for_single_feature_map(
-                    l, o, r, c, image_sizes, t
+                    l, o, r, c, image_sizes, tl, t
                 )
             )
 
@@ -570,7 +571,7 @@ class FCOSOutputs(nn.Module):
 
     def forward_for_single_feature_map(
             self, locations, logits_pred, reg_pred,
-            ctrness_pred, image_sizes, top_feat=None
+            ctrness_pred, image_sizes, true_label, top_feat=None
     ):
         N, C, H, W = logits_pred.shape
 

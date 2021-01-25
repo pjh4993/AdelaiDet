@@ -108,9 +108,10 @@ class FCOS(nn.Module):
                 )
             return results, losses
         else:
+            training_targets = self.fcos_outputs._get_ground_truth(locations, gt_instances, reg_pred)
             results = self.fcos_outputs.predict_proposals(
                 logits_pred, reg_pred, ctrness_pred,
-                locations, images.image_sizes, top_feats
+                locations, images.image_sizes, training_targets["labels"], top_feats
             )
 
             return results, {}

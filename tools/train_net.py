@@ -66,7 +66,7 @@ class Trainer(DefaultTrainer):
             model = DistributedDataParallel(
                 model, device_ids=[comm.get_local_rank()], broadcast_buffers=False, find_unused_parameters=True
             )
-        super(DefaultTrainer, self).__init__(model, data_loader, optimizer)
+        super(DefaultTrainer, self).__init__(cfg)
 
         self.scheduler = self.build_lr_scheduler(cfg, optimizer)
         # Assume no other objects need to be checkpointed.

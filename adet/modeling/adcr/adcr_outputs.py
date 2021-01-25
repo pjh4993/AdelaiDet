@@ -7,7 +7,7 @@ import copy
 import os
 
 from detectron2.layers import cat
-from detectron2.structures import Instances, Boxes, pairwise_iou, pairwise_giou
+from detectron2.structures import Instances, Boxes, pairwise_iou
 from detectron2.utils.comm import get_world_size
 from detectron2.modeling import ROIPooler
 from fvcore.nn import sigmoid_focal_loss_jit
@@ -474,7 +474,7 @@ class ADCROutputs(nn.Module):
                 (max_reg_targets_per_im >= size_ranges[:, [0]]) & \
                 (max_reg_targets_per_im <= size_ranges[:, [1]])
 
-            is_cared_in_the_level |= weird_in_the_level
+            #is_cared_in_the_level |= weird_in_the_level
 
 
             #target_inds_per_im = locations_to_gt_inds + num_targets
@@ -763,7 +763,7 @@ class ADCROutputs(nn.Module):
 
     def predict_proposals(
             self, logits_pred, reg_pred, iou_pred,
-            locations, image_sizes, top_feats=None
+            locations, image_sizes, training_target, top_feats=None
     ):
         if self.training:
             self.pre_nms_thresh = self.pre_nms_thresh_train
@@ -781,7 +781,7 @@ class ADCROutputs(nn.Module):
         bundle = {
             "l": locations, "o": logits_pred,
             "r": reg_pred, "pi": iou_pred,
-            "s": self.strides, "pooler": self.pooler.level_poolers
+            "s": self.strides, "pooler": self.pooler.level_poolers, "tl":training_target["labels"], "it": training_target["iou_targets"]
         }
 
         for i, per_bundle in enumerate(zip(*bundle.values())):
@@ -795,10 +795,12 @@ class ADCROutputs(nn.Module):
             s = per_bundle["s"]
             pi = per_bundle["pi"]
             pooler = per_bundle["pooler"]
+            tl = per_bundle["tl"]
+            it = per_bundle["it"]
 
             sampled_boxes.append(
                 self.forward_for_single_feature_map(
-                    l, o, r, pi, s, image_sizes, pooler
+                    l, o, r, pi, s, image_sizes, pooler, tl, it
                 )
             )
 
@@ -815,7 +817,7 @@ class ADCROutputs(nn.Module):
 
     def forward_for_single_feature_map(
             self, locations, logits_pred, reg_pred, iou_pred,
-            stride, image_sizes, pooler
+            stride, image_sizes, pooler, true_label, iou_target
     ):
         N, C, H, W = logits_pred.shape
 
@@ -830,11 +832,29 @@ class ADCROutputs(nn.Module):
         iou_pred = iou_pred.sigmoid().reshape(N, -1)
 
         # we first filter detection result with lower than iou_threshold
-        logits_pred[logits_pred < 0.5] = 0
-        iou_pred[iou_pred < 0.5] = 0
+        #logits_pred[logits_pred < 0.5] = 0
+        #iou_pred[iou_pred < 0.5] = 0
+        iou_pred = iou_target.unsqueeze(0)
         candidate_inds = (iou_pred > self.pre_nms_iou_thresh)
         pre_nms_top_n = candidate_inds.reshape(N, -1).sum(1)
         pre_nms_top_n = pre_nms_top_n.clamp(max=self.pre_nms_topk)
+
+        iou_map = nn.functional.interpolate((iou_target.reshape(1,1,logits_pred.shape[1], logits_pred.shape[2]) * 255), scale_factor=8).squeeze(0)
+
+        logits_flatten = logits_pred.clone().detach().reshape(1,-1,self.num_classes)
+        #logits_flatten[0,torch.arange(len(true_label))[true_label != self.num_classes],true_label[true_label != self.num_classes]] = 1.0
+        true_label[true_label == self.num_classes] = 0
+
+        cls_map = logits_pred.reshape(1,-1,self.num_classes)[0,torch.arange(len(true_label)),true_label].reshape(1,1,logits_pred.shape[1], logits_pred.shape[2]) * 255
+        cls_map = nn.functional.interpolate(cls_map, scale_factor=8).squeeze(0)
+
+        cls_max = (logits_flatten.max(dim=2)[0].unsqueeze(0) * 255).reshape(1,1,logits_pred.shape[1],logits_pred.shape[2])
+        cls_max = nn.functional.interpolate(cls_max, scale_factor=8).squeeze(0)
+
+        #import cv2
+        #cv2.imwrite('output/cls_map{}.png'.format(len(iou_target)), cls_map.permute(1,2,0).detach().cpu().numpy())
+        #cv2.imwrite('output/iou_map{}.png'.format(len(iou_target)), iou_map.permute(1,2,0).detach().cpu().numpy())
+        #cv2.imwrite('output/cls_max{}.png'.format(len(iou_target)), cls_max.permute(1,2,0).detach().cpu().numpy())
 
         results = []
         for i in range(N):
