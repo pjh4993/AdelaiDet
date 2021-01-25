@@ -385,14 +385,12 @@ class FCOSOutputs(nn.Module):
         instances = instances[pos_inds]
         instances.pos_inds = pos_inds
 
-        assert (instances.gt_inds.unique() != gt_object.unique()).sum() == 0
+        #assert (instances.gt_inds.unique() != gt_object.unique()).sum() == 0
 
         ctrness_targets = compute_ctrness_targets(instances.reg_targets)
         ctrness_targets_sum = ctrness_targets.sum()
         loss_denorm = max(reduce_sum(ctrness_targets_sum).item() / num_gpus, 1e-6)
         instances.gt_ctrs = ctrness_targets
-
-        positive_identity_loss = None
 
         if pos_inds.numel() > 0:
             reg_loss = self.loc_loss_func(
@@ -405,17 +403,6 @@ class FCOSOutputs(nn.Module):
                 instances.ctrness_pred.sigmoid(),
                 ctrness_targets
             ) / num_pos_avg
-
-            """
-            positive_identity_loss = self.identity_loss_func(
-                instances.identity_pred,
-                instances.gt_inds,
-            ) / (num_pos_avg**2)
-            """
-            positive_identity_loss = self.identity_loss_func(
-                instances.identity_pred,
-                instances.gt_inds,
-            )
         else:
             reg_loss = instances.reg_pred.sum() * 0
             ctrness_loss = instances.ctrness_pred.sum() * 0
@@ -429,7 +416,7 @@ class FCOSOutputs(nn.Module):
             "loss_fcos_ctr": ctrness_loss,
             #"loss_negative_identity_mean": negative_identity_mean_loss,
             #"loss_negative_identity_std": negative_identity_std_loss,
-            "loss_positive_identity": positive_identity_loss,
+            #"loss_positive_identity": positive_identity_loss,
         }
         extras = {
             "instances": instances,
