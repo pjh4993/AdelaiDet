@@ -83,7 +83,7 @@ class ADCR(nn.Module):
         """
         features = [features[f] for f in self.in_features]
         locations = self.compute_locations(features)
-        logits_pred, reg_pred, cid_pred, rid_pred, iou_pred, top_feats, bbox_towers = self.adcr_head(
+        logits_pred, reg_pred, iou_pred, top_feats, bbox_towers = self.adcr_head(
             features, top_module, self.yield_proposal
         )
 
@@ -100,15 +100,15 @@ class ADCR(nn.Module):
 
         if self.training:
             results, losses = self.adcr_outputs.losses(
-                logits_pred, reg_pred, cid_pred, rid_pred, iou_pred,
-                locations, gt_instances, self.adcr_head.relation_net, top_feats
+                logits_pred, reg_pred, iou_pred,
+                locations, gt_instances, top_feats
             )
 
             if self.yield_proposal:
                 with torch.no_grad():
                     results["proposals"] = self.adcr_outputs.predict_proposals(
-                        logits_pred, reg_pred, cid_pred, rid_pred, iou_pred,
-                        locations, images.image_sizes, self.adcr_head.relation_net, top_feats
+                        logits_pred, reg_pred, iou_pred,
+                        locations, images.image_sizes, top_feats
                     )
 
 
@@ -150,8 +150,8 @@ class ADCR(nn.Module):
             return results, losses
         else:
             results = self.adcr_outputs.predict_proposals(
-                logits_pred, reg_pred, cid_pred, rid_pred, iou_pred,
-                locations, images.image_sizes, self.adcr_head.relation_net, top_feats
+                logits_pred, reg_pred, iou_pred,
+                locations, images.image_sizes, top_feats
             )
 
             return results, {}
@@ -190,8 +190,6 @@ class ADCRHead(nn.Module):
                                 cfg.MODEL.ADCR.USE_DEFORMABLE),
                         "bbox": (cfg.MODEL.ADCR.NUM_BOX_CONVS,
                                  cfg.MODEL.ADCR.USE_DEFORMABLE),
-                        "emb": (cfg.MODEL.ADCR.NUM_EMB_CONVS,
-                                  cfg.MODEL.ADCR.USE_DEFORMABLE)
                         }
         norm = None if cfg.MODEL.ADCR.NORM == "none" else cfg.MODEL.ADCR.NORM
         self.num_levels = len(input_shape)
@@ -240,20 +238,9 @@ class ADCRHead(nn.Module):
             in_channels, 4, kernel_size=3,
             stride=1, padding=1
         )
-        self.cid_emb = nn.Conv2d(
-            in_channels, cfg.MODEL.ADCR.EMB_DIM , kernel_size=3,
-            stride=1, padding=1
-        )
-        self.rid_emb = nn.Conv2d(
-            in_channels, cfg.MODEL.ADCR.EMB_DIM , kernel_size=3,
-            stride=1, padding=1
-        )
         self.iou_pred = nn.Conv2d(
             in_channels, 1, kernel_size=3,
             stride=1, padding=1
-        )
-        self.relation_net = nn.Conv1d(
-            cfg.MODEL.ADCR.EMB_DIM * 2, 1, kernel_size=1
         )
 
         if cfg.MODEL.ADCR.USE_SCALE:
@@ -262,48 +249,34 @@ class ADCRHead(nn.Module):
             self.scales = None
 
         for modules in [
-            self.cls_tower, self.bbox_tower, self.emb_tower,
-            self.cls_logits, self.bbox_pred, self.iou_pred, self.relation_net
+            self.cls_tower, self.bbox_tower, 
+            self.cls_logits, self.bbox_pred, self.iou_pred
         ]:
             for l in modules.modules():
                 if isinstance(l, nn.Conv2d):
                     torch.nn.init.normal_(l.weight, std=0.01)
                     torch.nn.init.constant_(l.bias, 0)
 
-        for modules in [
-            self.cid_emb, self.rid_emb,
-        ]:
-            for l in modules.modules():
-                if isinstance(l, nn.Conv2d):
-                    torch.nn.init.normal_(l.weight, std=0.1)
-                    torch.nn.init.constant_(l.bias, 0)
-
         # initialize the bias for focal loss
         prior_prob = cfg.MODEL.ADCR.PRIOR_PROB
         bias_value = -math.log((1 - prior_prob) / prior_prob)
         torch.nn.init.constant_(self.cls_logits.bias, bias_value)
-        torch.nn.init.constant_(self.relation_net.bias, bias_value)
         torch.nn.init.constant_(self.iou_pred.bias, bias_value)
 
     def forward(self, x, top_module=None, yield_bbox_towers=False):
         logits = []
         bbox_reg = []
         iou_pred = []
-        cid_pred = []
-        rid_pred = []
         top_feats = []
         bbox_towers = []
         for l, feature in enumerate(x):
             cls_tower = self.cls_tower(feature)
             bbox_tower = self.bbox_tower(feature)
-            emb_tower = self.emb_tower(feature)
 
             if yield_bbox_towers:
                 bbox_towers.append(bbox_tower)
 
             logits.append(self.cls_logits(cls_tower))
-            cid_pred.append(self.cid_emb(emb_tower))
-            rid_pred.append(self.rid_emb(emb_tower))
             iou_pred.append(self.iou_pred(bbox_tower))
 
             reg = self.bbox_pred(bbox_tower)
@@ -314,4 +287,4 @@ class ADCRHead(nn.Module):
 
             if top_module is not None:
                 top_feats.append(top_module(bbox_tower))
-        return logits, bbox_reg, cid_pred, rid_pred, iou_pred, top_feats, bbox_towers
+        return logits, bbox_reg, iou_pred, top_feats, bbox_towers

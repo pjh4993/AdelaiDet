@@ -82,6 +82,7 @@ class ADCROutputs(nn.Module):
 
         self.in_cb, self.ext_cb = cfg.MODEL.ADCR.IN_CB, cfg.MODEL.ADCR.EXT_CB
         self.pooler = ROIPooler(output_size=1, scales=[1/x for x in self.strides], sampling_ratio=0, pooler_type='ROIPool')
+        self.piou_loss_func = cfg.MODEL.ADCR.PIOU_LOSS_FUNC
         self.focal_piou = cfg.MODEL.ADCR.FOCAL_PIOU
         self.focal_emb = cfg.MODEL.ADCR.FOCAL_EMB
 
@@ -408,8 +409,6 @@ class ADCROutputs(nn.Module):
         labels = []
         reg_targets = []
         iou_targets = []
-        cid_targets = []
-        rid_targets = []
         #target_inds = []
         xs, ys = locations[:, 0], locations[:, 1]
 
@@ -505,18 +504,9 @@ class ADCROutputs(nn.Module):
             iou_targets_per_im[iou_targets_per_im < 1] += 1e-6
             iou_targets_per_im[rpos_to_min_area == INF] = 0
 
-            cpos_to_gt_inds += num_objects
-            rpos_to_gt_inds += num_objects
-
-            cpos_to_gt_inds[cpos_to_min_area == INF] = -1
-            rpos_to_gt_inds[rpos_to_min_area == INF] = -1
-
-
             labels.append(labels_per_im)
             reg_targets.append(reg_targets_per_im)
             iou_targets.append(iou_targets_per_im)
-            cid_targets.append(cpos_to_gt_inds)
-            rid_targets.append(rpos_to_gt_inds)
             #target_inds.append(target_inds_per_im)
             num_objects += len(targets_per_im)
 
@@ -524,8 +514,6 @@ class ADCROutputs(nn.Module):
             "labels": labels,
             "reg_targets": reg_targets,
             "iou_targets": iou_targets,
-            "cid_targets": cid_targets,
-            "rid_targets": rid_targets,
             #"target_inds": target_inds
         }, num_objects
 
@@ -542,7 +530,6 @@ class ADCROutputs(nn.Module):
         self.CPSR = 0
         self.PIoU_thr = 0
         self.PCLS_thr = 0
-        self.EMB_acc = 0
         self.PIOU_acc = {}
         self.CPMAX = 0
         self.RPMAX = 0
@@ -573,14 +560,6 @@ class ADCROutputs(nn.Module):
             x.reshape(-1, 4) for x in training_targets["reg_targets"]
         ], dim=0,)
 
-        instances.cid_targets = cat([
-            # Reshape: (N, Hi, Wi, 1) -> (N*Hi*Wi)
-            x.reshape(-1) for x in training_targets["cid_targets"]
-        ], dim=0,)
-        instances.rid_targets = cat([
-            # Reshape: (N, Hi, Wi, 1) -> (N*Hi*Wi)
-            x.reshape(-1) for x in training_targets["rid_targets"]
-        ], dim=0,)
         instances.iou_targets = cat([
             # Reshape: (N, Hi, Wi, 1) -> (N*Hi*Wi)
             x.reshape(-1) for x in training_targets["iou_targets"]
@@ -613,23 +592,6 @@ class ADCROutputs(nn.Module):
             # Reshape: (N, 1, Hi, Wi) -> (N*Hi*Wi,D)
             x.permute(0, 2, 3, 1).reshape(-1, self.emb_dim) for x in rid_pred
         ], dim=0,)
-
-        """
-        log = {}
-        log["logits"] = [
-            x[0].detach() for x in logits_pred
-        ]
-        log["iou_pred"] = [
-            x[0].detach() for x in iou_pred
-        ]
-
-        log["labels"] = [
-            x[:num].detach().reshape(logits.shape[1:]).unsqueeze(0) for x, num, logits in zip(training_targets["labels"], num_loc_list, log["logits"])
-        ]
-        log["iou_target"] = [
-            x[:num].detach().reshape(piou.shape) for x, num, piou in zip(training_targets["iou_targets"], num_loc_list, log["iou_pred"])
-        ]
-        """
 
         if len(top_feats) > 0:
             instances.top_feats = cat([
@@ -700,6 +662,7 @@ class ADCROutputs(nn.Module):
                 ]
             st = en
             en += 0.1
+
         # regression loss
         reg_pos_instances = instances[rpos_inds]
         reg_pos_instances.pos_inds = rpos_inds
@@ -708,32 +671,21 @@ class ADCROutputs(nn.Module):
             reg_loss = self.loc_loss_func(
                 reg_pos_instances.reg_pred,
                 reg_pos_instances.reg_targets,
-                #ctrness_targets
             ).mean()
-            #class_loss[pos_inds, labels[pos_inds]] *= (1 - reg_loss/2).detach()
-            #class_loss[pos_inds] *= (1 - reg_loss/2).unsqueeze(1).detach()
-            #reg_loss = reg_loss.sum() / loss_denorm
         else:
             reg_loss = instances.reg_pred.sum() * 0
             piou_loss = instances.iou_pred.sum() * 0
 
-        # embedding loss (cid, rid)
-
         #emb_pull_loss, emb_push_loss = self.embedding_loss(instances, num_loc_list, rpos_inds, cpos_inds)
 
-        reg_loss_portion = 1 - reg_loss.detach().clone()
         losses = {
             "loss_adcr_cls": class_loss,
             "loss_adcr_loc": reg_loss,
-            #"loss_adcr_piou": piou_loss * reg_loss_portion,
             "loss_adcr_piou": piou_loss,
-            #"loss_adcr_emb_pull": emb_pull_loss * reg_loss_portion,
-            #"loss_adcr_emb_push": emb_push_loss * reg_loss_portion,
         }
         extras = {
             "instances": instances,
             "num_objects": num_objects,
-            #"log": log
         }
         return extras, losses
 
@@ -810,8 +762,8 @@ class ADCROutputs(nn.Module):
         return pull_loss * pos_ratio, (push_loss + glob_loss)*pos_ratio
 
     def predict_proposals(
-            self, logits_pred, reg_pred, cid_pred, rid_pred, iou_pred,
-            locations, image_sizes, relation_net, top_feats=None
+            self, logits_pred, reg_pred, iou_pred,
+            locations, image_sizes, top_feats=None
     ):
         if self.training:
             self.pre_nms_thresh = self.pre_nms_thresh_train
@@ -828,7 +780,7 @@ class ADCROutputs(nn.Module):
 
         bundle = {
             "l": locations, "o": logits_pred,
-            "r": reg_pred, "pi": iou_pred, "ci": cid_pred, "ri": rid_pred,
+            "r": reg_pred, "pi": iou_pred,
             "s": self.strides, "pooler": self.pooler.level_poolers
         }
 
@@ -842,13 +794,11 @@ class ADCROutputs(nn.Module):
             r = per_bundle["r"] * per_bundle["s"]
             s = per_bundle["s"]
             pi = per_bundle["pi"]
-            ci = per_bundle["ci"]
-            ri = per_bundle["ri"]
             pooler = per_bundle["pooler"]
 
             sampled_boxes.append(
                 self.forward_for_single_feature_map(
-                    l, o, r, pi, ci, ri, s, image_sizes, relation_net, pooler
+                    l, o, r, pi, s, image_sizes, pooler
                 )
             )
 
@@ -865,7 +815,7 @@ class ADCROutputs(nn.Module):
 
     def forward_for_single_feature_map(
             self, locations, logits_pred, reg_pred, iou_pred,
-            cid_pred, rid_pred, stride, image_sizes, relation_net, pooler
+            stride, image_sizes, pooler
     ):
         N, C, H, W = logits_pred.shape
 
@@ -878,12 +828,6 @@ class ADCROutputs(nn.Module):
 
         iou_pred = iou_pred.view(N, 1, H, W).permute(0, 2, 3, 1)
         iou_pred = iou_pred.sigmoid().reshape(N, -1)
-
-        cid_pred = cid_pred.view(N, self.emb_dim, H, W).permute(0, 2, 3, 1)
-        cid_pred = cid_pred.reshape(N, -1, self.emb_dim)
-
-        rid_pred = rid_pred.reshape(N, self.emb_dim, H, W).permute(0, 2, 3, 1)
-        rid_pred = rid_pred.reshape(N, -1, self.emb_dim)
 
         # we first filter detection result with lower than iou_threshold
         logits_pred[logits_pred < 0.5] = 0
@@ -931,7 +875,7 @@ class ADCROutputs(nn.Module):
 
             boxlist = Instances(image_sizes[i])
             boxlist.pred_boxes = Boxes(detections)
-            boxlist.scores = torch.sqrt(per_box_cls)
+            boxlist.scores = per_box_piou
             boxlist.pred_classes = per_class
             boxlist.locations = per_locations
             boxlist.centerness = per_box_piou

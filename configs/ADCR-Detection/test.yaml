@@ -7,6 +7,8 @@ MODEL:
     TSS: "DATSS"
     CENTER_SAMPLE: False
     FOCAL_EMB: False
+    PIOU_LOSS_FUNC: "BCELoss"
+    FOCAL_PIOU: True
     EMB_DIM: 1
     POS_SAMPLE_RATE: -0.6
 INPUT:
