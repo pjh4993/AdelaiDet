@@ -357,23 +357,8 @@ class FCOSOutputs(nn.Module):
             class_target,
             alpha=self.focal_loss_alpha,
             gamma=self.focal_loss_gamma,
-<<<<<<< HEAD
             reduction="none",
         ) #/ num_pos_avg
-=======
-            reduction="sum",
-        ) / num_pos_avg
-        
-        neg_instances = instances[neg_inds]
-        negative_identity_mean_loss = nn.SmoothL1Loss(reduction="mean")(
-            instances.identity_pred.mean(),
-            torch.zeros_like(neg_instances.identity_pred.mean()),
-        )
-        negative_identity_std_loss = nn.SmoothL1Loss(reduction="mean")(
-            neg_instances.identity_pred.std(),
-            0.1 * torch.ones_like(neg_instances.identity_pred.std()),
-        )
->>>>>>> 9c753763772d3663905919ca1c80d83696841a19
 
         positive_diff = (1 - instances.logits_pred[class_target == 1].sigmoid()).abs()
         negative_diff = (0 - instances.logits_pred[class_target == 0].sigmoid()).abs()
