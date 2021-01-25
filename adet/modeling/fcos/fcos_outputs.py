@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from detectron2.layers import cat
 from detectron2.structures import Instances, Boxes
 from detectron2.utils.comm import get_world_size
+from detectron2.utils.events import get_event_storage
 from fvcore.nn import sigmoid_focal_loss_jit
 
 from adet.utils.comm import reduce_sum
@@ -333,9 +334,31 @@ class FCOSOutputs(nn.Module):
             class_target,
             alpha=self.focal_loss_alpha,
             gamma=self.focal_loss_gamma,
-            reduction="sum",
-        ) / num_pos_avg
+            reduction="none",
+        ) #/ num_pos_avg
 
+        positive_diff = (1 - instances.logits_pred[class_target == 1].sigmoid()).abs()
+        negative_diff = (0 - instances.logits_pred[class_target == 0].sigmoid()).abs()
+
+        positive_mean = positive_diff.mean().detach()
+        positive_std = positive_diff.std().detach()
+
+        negative_mean = negative_diff.mean().detach()
+        negative_std = negative_diff.std().detach()
+
+        upper_true_loss = class_loss.flatten()[(class_target == 1).flatten()][(positive_diff > (positive_mean + positive_std))].sum() / num_pos_avg
+        under_true_loss = class_loss.flatten()[(class_target == 1).flatten()][(positive_diff <= (positive_mean + positive_std))].sum() / num_pos_avg
+        upper_false_loss = class_loss.flatten()[(class_target == 0).flatten()][(negative_diff > (negative_mean + negative_std))].sum() / num_pos_avg
+        under_false_loss = class_loss.flatten()[(class_target == 0).flatten()][(negative_diff <= (negative_mean + negative_std))].sum() / num_pos_avg
+
+        storage = get_event_storage()
+        if storage.iter % 20 == 0:
+            logger.info("upper_true {}, under_true {} upper_false {} under_false {}".format(
+                (positive_diff > positive_mean + positive_std).sum(), (positive_diff <= positive_mean + positive_std).sum(),
+                (negative_diff > negative_mean + negative_std).sum(), (negative_diff <= negative_mean + negative_std).sum()
+            ))
+
+        
         instances = instances[pos_inds]
         instances.pos_inds = pos_inds
 
@@ -361,7 +384,10 @@ class FCOSOutputs(nn.Module):
             ctrness_loss = instances.ctrness_pred.sum() * 0
 
         losses = {
-            "loss_fcos_cls": class_loss,
+            "loss_upper_true_cls": upper_true_loss,
+            "loss_under_true_cls": under_true_loss,
+            "loss_upper_false_cls": upper_false_loss,
+            "loss_under_false_cls": under_false_loss,
             "loss_fcos_loc": reg_loss,
             "loss_fcos_ctr": ctrness_loss
         }
