@@ -36,9 +36,11 @@ dist/
 .idea
 .vscode
 .python-version
+data_dict.json
 
 # project dirs
 /datasets/coco
+/datasets/nlos
 /datasets/lvis
 /datasets/pic
 /datasets/ytvos

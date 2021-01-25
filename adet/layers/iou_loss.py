@@ -54,11 +54,13 @@ class IOULoss(nn.Module):
         ious = (area_intersect + 1.0) / (area_union + 1.0)
         gious = ious - (ac_uion - area_union) / ac_uion
         if self.loc_loss_type == 'iou':
-            losses = -torch.log(ious)
+            losses = -torch.log(ious)*(1-ious)
         elif self.loc_loss_type == 'linear_iou':
             losses = 1 - ious
         elif self.loc_loss_type == 'giou':
             losses = 1 - gious
+        elif self.loc_loss_type == 'giou_focal':
+            losses = -torch.log((1 + gious)/2)*((1 - gious)/2)
         else:
             raise NotImplementedError
 
